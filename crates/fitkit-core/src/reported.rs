@@ -13,11 +13,6 @@ pub enum Reported<T> {
 }
 
 impl<T> Reported<T> {
-    /// Whether a value is present.
-    pub const fn is_known(&self) -> bool {
-        matches!(self, Self::Known(_))
-    }
-
     /// Whether the source was silent.
     pub const fn is_unreported(&self) -> bool {
         matches!(self, Self::Unreported)
@@ -41,14 +36,6 @@ impl<T> Reported<T> {
     pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Reported<U> {
         match self {
             Self::Known(value) => Reported::Known(f(value)),
-            Self::Unreported => Reported::Unreported,
-        }
-    }
-
-    /// A borrowed view.
-    pub const fn as_ref(&self) -> Reported<&T> {
-        match self {
-            Self::Known(value) => Reported::Known(value),
             Self::Unreported => Reported::Unreported,
         }
     }

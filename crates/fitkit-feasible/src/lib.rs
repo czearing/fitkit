@@ -137,9 +137,13 @@ impl Problem {
     ///
     /// # Errors
     ///
-    /// When the requirement refuses, or states a row of the wrong width.
+    /// When the requirement refuses, states nothing, or states a row of the wrong width.
     pub fn require<R: Requirement>(&mut self, requirement: &R) -> Answer<&mut Self> {
-        for row in requirement.rows(self.vars())? {
+        let stated = requirement.rows(self.vars())?;
+        if stated.is_empty() {
+            return Err(Refusal::uninformative("a requirement stated nothing"));
+        }
+        for row in stated {
             if row.coefficients.len() != self.vars() {
                 return Err(Refusal::incoherent("a requirement stated a row of the wrong width"));
             }
@@ -328,7 +332,7 @@ fn solve(problem: &Problem) -> Feasible {
 mod tests {
     use alloc::vec;
 
-    use fitkit_core::Refusal;
+    use fitkit_core::{Refusal, RefusalKind};
     use fitkit_ledger::Citation;
 
     use super::{Feasible, Problem, Requirement, Row, Sense};
@@ -424,6 +428,22 @@ mod tests {
         assert!(problem.solve().holds());
 
         assert!(Problem::new(1).require(&HoldsTogether).is_err(), "a refusal is an answer");
+    }
+
+    #[test]
+    fn a_requirement_that_states_nothing_is_refused() {
+        struct SaysNothing;
+        impl Requirement for SaysNothing {
+            fn citation(&self) -> Citation {
+                Citation { key: "Example2020", source: "Example, J. Test 1, 1 (2020)" }
+            }
+            fn rows(&self, _: usize) -> Result<vec::Vec<Row>, Refusal> {
+                Ok(vec::Vec::new())
+            }
+        }
+
+        let refusal = Problem::new(2).require(&SaysNothing).expect_err("nothing is not a bound");
+        assert_eq!(refusal.kind(), RefusalKind::Uninformative);
     }
 
     #[test]

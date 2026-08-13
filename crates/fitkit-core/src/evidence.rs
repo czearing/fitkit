@@ -18,12 +18,6 @@ impl Span {
         Self { start, end: end.max(start) }
     }
 
-    /// A span over a whole problem of size `len`.
-    #[inline]
-    pub fn whole(len: usize) -> Self {
-        Self::new(0, len)
-    }
-
     /// Indices covered. Zero if the fields were set inverted by hand.
     #[inline]
     pub const fn len(self) -> usize {
