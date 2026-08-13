@@ -48,6 +48,24 @@ Fails if a beam misses the proven optimum on a pool small enough to enumerate.
 but it converts an unbounded worry into a measured one, and it fails loudly when the objective
 changes shape.
 
+## `assert_identity_plan_changes_nothing`
+
+Fails if applying an identity plan alters the signal.
+
+**Catches:** a stage that always renders and then trims back toward the input. Such a stage cannot
+leave a passage it has no evidence about alone, however small the change looks. Only reachable for
+a `Model` whose `Signal` implements `Segmented`, and it is the override of `apply_plan` that this
+usually catches.
+
+## `assert_margin_holds`
+
+Fails if a reported margin is not the error the answer actually survives. Walks every corner of the
+box the margin describes, requires all of them to satisfy every row, then requires a point just
+outside to fail.
+
+**Catches:** a margin that is decoration. Also fails on an unbounded margin, which means a missing
+constraint rather than a safe answer. Enumerates corners, so keep it under twenty variables.
+
 ## Invariants worth adding per engine
 
 These cannot be written generically, but every engine should have them.

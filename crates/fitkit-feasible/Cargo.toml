@@ -1,0 +1,24 @@
+[package]
+name = "fitkit-feasible"
+description = "Bounded-variable linear feasibility with a Chebyshev margin, and no dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fitkit-core.workspace = true
+fitkit-ledger.workspace = true
+
+[features]
+default = ["std"]
+std = ["fitkit-core/std", "fitkit-ledger/std"]
+
+[[bench]]
+name = "feasible"
+harness = false
+
+[lints]
+workspace = true

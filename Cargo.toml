@@ -4,6 +4,7 @@ members = [
     "crates/fitkit-core",
     "crates/fitkit-dp",
     "crates/fitkit-fit",
+    "crates/fitkit-feasible",
     "crates/fitkit-ledger",
     "crates/fitkit-guards",
     "crates/fitkit",
@@ -18,11 +19,12 @@ repository = "https://github.com/czearing/fitkit"
 authors = ["czearing"]
 
 [workspace.dependencies]
-fitkit-core = { version = "0.1.0", path = "crates/fitkit-core" }
-fitkit-dp = { version = "0.1.0", path = "crates/fitkit-dp" }
-fitkit-fit = { version = "0.1.0", path = "crates/fitkit-fit" }
-fitkit-ledger = { version = "0.1.0", path = "crates/fitkit-ledger" }
-fitkit-guards = { version = "0.1.0", path = "crates/fitkit-guards" }
+fitkit-core = { version = "0.1.0", path = "crates/fitkit-core", default-features = false }
+fitkit-dp = { version = "0.1.0", path = "crates/fitkit-dp", default-features = false }
+fitkit-fit = { version = "0.1.0", path = "crates/fitkit-fit", default-features = false }
+fitkit-feasible = { version = "0.1.0", path = "crates/fitkit-feasible", default-features = false }
+fitkit-ledger = { version = "0.1.0", path = "crates/fitkit-ledger", default-features = false }
+fitkit-guards = { version = "0.1.0", path = "crates/fitkit-guards", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "warn"

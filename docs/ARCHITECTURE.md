@@ -1,6 +1,6 @@
 # Architecture
 
-Six layers. Each answers one question, and each can be replaced without touching the others.
+Seven layers. Each answers one question, and each can be replaced without touching the others.
 
 | Layer | Question | Type |
 | --- | --- | --- |
@@ -9,6 +9,7 @@ Six layers. Each answers one question, and each can be replaced without touching
 | Validity | does this question fall inside what was measured | `Law::admits`, `Refusal` |
 | Model | what settings exist, and what does each one predict | `Model::candidates`, `Model::render` |
 | Search | which setting best explains the evidence | `decode_path`, `optimise_subset` |
+| Feasibility | what satisfies every requirement, and by how much | `Problem`, `Margin` |
 | Verification | how would we know if this were wrong | `fitkit-guards` |
 
 ## Why the layers are separate
@@ -25,6 +26,11 @@ search is a bug in one place.
 
 **Recovery is a free function, not a trait method.** `recover` cannot be overridden, so no model
 can quietly substitute its own pipeline.
+
+**Applying a plan is a trait method, and can be.** `Model::apply_plan` renders each span from the
+input rather than from the running result, so settings never compound. A setting that outlives its
+span, such as a tail that reaches the next one, overrides it. That is the one place a domain
+legitimately needs to change how the result is assembled, and it cannot reach the search.
 
 ## The recovery pipeline
 
@@ -51,10 +57,12 @@ Plan<Params>
 that the evidence measures outright belongs there, so the result is the measured value rather than
 the nearest grid point.
 
-## Sequence problems and set problems
+## Three shapes of problem
 
 `decode_path` is for problems with an order: which setting held over each span. `optimise_subset`
-is for problems without one: which members of a pool to include. Most engines need both.
+is for problems without one: which members of a pool to include. `Problem::solve` is for problems
+with nothing to choose at all, only requirements that must hold together. Most engines need more
+than one.
 
 Set problems carry a trap. If the objective grows quadratically in the member count and the
 penalty also grows quadratically, there is no interior optimum and the search runs to one extreme
@@ -67,4 +75,7 @@ or the other. Check that your objective is sublinear in pair count before trusti
 3. Write `emission` as a cost, lower being a better explanation.
 4. Write `transition` if the decision should resist change.
 5. Move continuous quantities out of the grid and into `refine`.
-6. Pin the guards from [GUARDS.md](GUARDS.md) as tests.
+6. Implement `Segmented` if the answer must be written back into the signal.
+7. State anything that is a constraint rather than a choice as a `Requirement`. See
+   [FEASIBILITY.md](FEASIBILITY.md).
+8. Pin the guards from [GUARDS.md](GUARDS.md) as tests.

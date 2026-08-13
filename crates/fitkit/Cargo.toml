@@ -14,6 +14,7 @@ authors.workspace = true
 [dependencies]
 fitkit-core.workspace = true
 fitkit-dp.workspace = true
+fitkit-feasible.workspace = true
 fitkit-fit.workspace = true
 fitkit-ledger.workspace = true
 
@@ -22,7 +23,7 @@ fitkit-guards.workspace = true
 
 [features]
 default = ["std"]
-std = ["fitkit-core/std", "fitkit-dp/std", "fitkit-fit/std", "fitkit-ledger/std"]
+std = ["fitkit-core/std", "fitkit-dp/std", "fitkit-feasible/std", "fitkit-fit/std", "fitkit-ledger/std"]
 
 [lints]
 workspace = true

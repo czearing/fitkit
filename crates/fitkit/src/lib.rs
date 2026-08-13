@@ -5,10 +5,14 @@
 //!
 //! | Layer | What it gives you |
 //! | --- | --- |
-//! | [`core`] | [`Confidence`], [`Evidence`], [`Reported`], [`Refusal`], [`Plan`] |
+//! | [`core`] | [`Confidence`], [`Margin`], [`Evidence`], [`Reported`], [`Refusal`], [`Plan`] |
 //! | [`dp`] | [`decode_path`] for sequences, [`optimise_subset`] for sets |
-//! | [`fit`] | [`Model`] and [`Fit`], recovered by [`recover`] |
+//! | [`fit`] | [`Model`] and [`Fit`], recovered by [`recover`] and applied by [`Model::apply_plan`] |
+//! | [`feasible`] | [`Problem`] and [`Requirement`], solved for a region and its [`Margin`] |
 //! | [`ledger`] | [`Law`] and [`Record`], reached through [`ask`] |
+//!
+//! [`recover`] says what to do, [`margins`] says how much error that survives, and [`Problem`]
+//! answers the same question where there is nothing to decode.
 //!
 //! ```
 //! use fitkit::prelude::*;
@@ -46,27 +50,32 @@
 
 pub use fitkit_core as core;
 pub use fitkit_dp as dp;
+pub use fitkit_feasible as feasible;
 pub use fitkit_fit as fit;
 pub use fitkit_ledger as ledger;
 
 #[doc(inline)]
 pub use fitkit_core::{
-    Answer, Confidence, Control, Evidence, Plan, Refusal, RefusalKind, Reported, Span,
+    Answer, Confidence, Control, Evidence, Margin, Plan, Refusal, RefusalKind, Reported, Span,
 };
 #[doc(inline)]
 pub use fitkit_dp::{
-    decode_path, decode_path_with_cost, optimise_subset, Decoded, Solver, SubsetResult,
+    decode_margins, decode_path, decode_path_with_cost, optimise_subset, Decoded, Solver,
+    SubsetResult,
 };
 #[doc(inline)]
-pub use fitkit_fit::{recover, Fit, Model};
+pub use fitkit_feasible::{Feasible, Problem, Requirement, Row, Sense};
+#[doc(inline)]
+pub use fitkit_fit::{margins, recover, Fit, Model, Segmented};
 #[doc(inline)]
 pub use fitkit_ledger::{ask, within, Citation, Law, Record};
 
 /// Everything needed to write a model.
 pub mod prelude {
     pub use crate::{
-        ask, decode_path, optimise_subset, recover, within, Answer, Citation, Confidence, Control,
-        Evidence, Fit, Law, Model, Plan, Record, Refusal, Reported, Span,
+        ask, decode_path, margins, optimise_subset, recover, within, Answer, Citation, Confidence,
+        Control, Evidence, Feasible, Fit, Law, Margin, Model, Plan, Problem, Record, Refusal,
+        Reported, Requirement, Row, Segmented, Sense, Span,
     };
 }
 

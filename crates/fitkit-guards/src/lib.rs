@@ -7,7 +7,8 @@ use std::fmt::Debug;
 
 use fitkit_core::Plan;
 use fitkit_dp::optimise_subset;
-use fitkit_fit::{recover, Fit};
+use fitkit_feasible::{Feasible, Problem};
+use fitkit_fit::{recover, Fit, Model, Segmented};
 
 /// Panic if any banned symbol appears in any source text.
 ///
@@ -99,15 +100,112 @@ where
     );
 }
 
+/// Panic unless applying an identity plan leaves the signal byte for byte unchanged.
+///
+/// The rule an engine breaks first: a stage that always renders, then trims back toward the input,
+/// cannot leave a passage it has no evidence about alone.
+///
+/// # Panics
+///
+/// If the model changes a signal it was given nothing to do to.
+pub fn assert_identity_plan_changes_nothing<M>(model: &M, signal: &M::Signal)
+where
+    M: Model,
+    M::Signal: Segmented + PartialEq + Debug,
+{
+    let applied = model.apply_plan(signal, &Plan::identity());
+    assert!(
+        &applied == signal,
+        "{} changed a signal under an identity plan, giving {applied:?}",
+        model.name()
+    );
+}
+
+/// Panic unless a reported margin is the error the answer really survives.
+///
+/// Checks every corner of the box the margin claims, then one step past it. A margin that is
+/// decoration fails here.
+///
+/// # Panics
+///
+/// If a point inside the margin breaks a row, or if nothing outside it does.
+pub fn assert_margin_holds(problem: &Problem) {
+    let Feasible::Region { point, margin } = problem.solve() else {
+        panic!("the problem has no answer, so there is no margin to check");
+    };
+    let radius = margin.get();
+    assert!(radius.is_finite(), "an unbounded margin means a missing constraint, not a safe one");
+    if radius <= 0.0 {
+        return;
+    }
+    assert!(
+        point.len() < 20,
+        "checking every corner of {} variables is not affordable",
+        point.len()
+    );
+
+    let moved = |corner: usize, scale: f64| -> Vec<f64> {
+        point
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let sign = if corner >> index & 1 == 1 { 1.0 } else { -1.0 };
+                value + sign * radius * scale
+            })
+            .collect()
+    };
+    let holds = |at: &[f64]| problem.rows().iter().all(|row| row.violation(at) <= 1e-9);
+
+    let corners = 1_usize << point.len();
+    let mut broke_outside = false;
+    for corner in 0..corners {
+        assert!(holds(&moved(corner, 0.99)), "a point inside the margin breaks a row");
+        broke_outside |= !holds(&moved(corner, 1.01));
+    }
+    assert!(
+        broke_outside,
+        "nothing outside the margin breaks, so the margin understates the region"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use fitkit_core::{Evidence, Span};
     use fitkit_fit::{Fit, Model};
 
+    use fitkit_core::Plan;
+    use fitkit_feasible::{Problem, Row, Sense};
+
     use super::{
-        assert_beam_matches_exact, assert_deterministic, assert_identity_without_evidence,
-        assert_untrusted_spans_stay_silent, forbid_symbols,
+        assert_beam_matches_exact, assert_deterministic, assert_identity_plan_changes_nothing,
+        assert_identity_without_evidence, assert_margin_holds, assert_untrusted_spans_stay_silent,
+        forbid_symbols,
     };
+
+    struct Doubler;
+
+    impl Model for Doubler {
+        type Signal = Vec<f64>;
+        type Params = f64;
+        fn name(&self) -> &'static str {
+            "doubler"
+        }
+        fn candidates(&self) -> Vec<f64> {
+            vec![1.0, 2.0]
+        }
+        fn render(&self, input: &Vec<f64>, params: &f64) -> Vec<f64> {
+            input.iter().map(|value| value * params).collect()
+        }
+    }
+
+    fn bounded() -> Problem {
+        let mut problem = Problem::new(2);
+        problem.bound(0, 0.0, 5.0);
+        problem.bound(1, 0.0, 5.0);
+        problem.row(Row::new(vec![1.0, 1.0], Sense::Le, 6.0, "total"));
+        problem.row(Row::new(vec![1.0, 1.0], Sense::Ge, 2.0, "enough"));
+        problem
+    }
 
     struct Silent;
 
@@ -143,6 +241,47 @@ mod tests {
         assert_identity_without_evidence(&Silent, &());
         assert_untrusted_spans_stay_silent(&Silent, &());
         assert_deterministic(&Silent, &());
+    }
+
+    #[test]
+    fn a_model_that_only_renders_where_told_passes() {
+        assert_identity_plan_changes_nothing(&Doubler, &vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "identity plan")]
+    fn a_stage_that_always_renders_is_caught() {
+        struct AlwaysOn;
+        impl Model for AlwaysOn {
+            type Signal = Vec<f64>;
+            type Params = f64;
+            fn name(&self) -> &'static str {
+                "always on"
+            }
+            fn candidates(&self) -> Vec<f64> {
+                vec![1.0]
+            }
+            fn render(&self, input: &Vec<f64>, params: &f64) -> Vec<f64> {
+                input.iter().map(|value| value * params).collect()
+            }
+            fn apply_plan(&self, input: &Vec<f64>, _plan: &Plan<f64>) -> Vec<f64> {
+                self.render(input, &0.5)
+            }
+        }
+        assert_identity_plan_changes_nothing(&AlwaysOn, &vec![1.0]);
+    }
+
+    #[test]
+    fn a_real_margin_survives_its_own_corners() {
+        assert_margin_holds(&bounded());
+    }
+
+    #[test]
+    #[should_panic(expected = "missing constraint")]
+    fn an_unbounded_margin_is_caught() {
+        let mut problem = Problem::new(1);
+        problem.row(Row::new(vec![1.0], Sense::Ge, 1.0, "at least one"));
+        assert_margin_holds(&problem);
     }
 
     #[test]

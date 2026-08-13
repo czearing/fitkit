@@ -5,8 +5,24 @@
 use fitkit::prelude::*;
 
 /// Readings from a sensor that drops out for part of the record.
+#[derive(Clone, Debug, PartialEq)]
 struct Log {
     readings: Vec<Option<f64>>,
+}
+
+/// Cutting and rejoining a log is all [`Model::apply_plan`] needs to write the answer back.
+impl Segmented for Log {
+    fn extent(&self) -> usize {
+        self.readings.len()
+    }
+
+    fn slice(&self, span: Span) -> Log {
+        Log { readings: self.readings.slice(span) }
+    }
+
+    fn splice(&mut self, span: Span, part: Log) {
+        Segmented::splice(&mut self.readings, span, part.readings);
+    }
 }
 
 /// The model: the room was held at one of a few whole degree setpoints at a time.
@@ -84,13 +100,14 @@ fn main() {
     };
 
     let plan = recover(&Thermostat, &log);
+    let tolerance = margins(&Thermostat, &log);
 
     println!("{plan}");
-    for control in &plan.controls {
+    for (control, margin) in plan.controls.iter().zip(&tolerance) {
         let verdict = if control.is_silent() {
             "unchanged".to_string()
         } else {
-            format!("{} C", control.params)
+            format!("{} C, survives {margin}", control.params)
         };
         println!("  reading {:>2}  {verdict}", control.span.start);
     }
@@ -98,5 +115,11 @@ fn main() {
     let held: Vec<i64> =
         plan.controls.iter().filter(|c| !c.is_silent()).map(|c| c.params).collect();
     assert_eq!(held, [20, 20, 20, 20, 20, 20, 23, 23, 23]);
+
+    // Writing the answer back leaves the dropouts exactly as they were found.
+    let corrected = Thermostat.apply_plan(&log, &plan);
+    assert_eq!(corrected.readings[6], None, "a span with no evidence is not written to");
+    assert_eq!(corrected.readings[2], Some(20.0), "the spike is replaced by the held setpoint");
+
     println!("\nthe spike at reading 2 was absorbed, the sustained step at reading 8 was kept");
 }

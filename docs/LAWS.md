@@ -22,6 +22,11 @@ to the solver. A category word is worse: one word carries an entire implied form
 one is refused, not approximated.** Without that rule, this file becomes where hardcoded values
 hide once they leave the source.
 
+The rule is enforced in the type system where it can be. `Requirement::citation` has no default,
+so a requirement cannot enter a `Problem` without naming a source, and `Requirement::rows` returns
+an `Answer`, so one that cannot be stated refuses rather than contributing nothing. See
+[FEASIBILITY.md](FEASIBILITY.md).
+
 ## What a law must supply
 
 ```rust

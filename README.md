@@ -10,8 +10,10 @@ The pattern:
 
 1. Measure reality into evidence that carries its own confidence.
 2. Refuse when the question falls outside what was measured.
-3. Choose parameters by dynamic programming over an enumerated candidate set.
-4. Verify against ground truth, and pin the anti-cheating rules as tests.
+3. Choose parameters by dynamic programming over an enumerated candidate set, or solve for the
+   region where every stated requirement holds.
+4. Report how much error the answer survives, not only what the answer is.
+5. Verify against ground truth, and pin the anti-cheating rules as tests.
 
 ## Install
 
@@ -70,17 +72,48 @@ let plan = recover(&Thermostat, &log);
 assert_eq!(plan.at(2).unwrap().params, 20);   // the spike is absorbed
 assert!(plan.at(6).unwrap().is_silent());     // the dropout is left alone
 assert_eq!(plan.at(9).unwrap().params, 23);   // the sustained step is kept
+
+// How wrong each reading could have been without changing the answer.
+let tolerance = margins(&Thermostat, &log);
+assert!(tolerance[2] < tolerance[0], "the spike is the least safe decision in the record");
+
+// Writing the answer back leaves spans with no evidence exactly as they were.
+let corrected = Thermostat.apply_plan(&log, &plan);
+assert_eq!(corrected[6], None);
 ```
 
 Run the full version with `cargo run -p fitkit --example thermostat`.
+
+## Requirements, where there is nothing to decode
+
+The other half of an engine asks what values satisfy every requirement at once, and how far out
+they can be before one fails.
+
+```rust
+use fitkit::prelude::*;
+
+let mut problem = Problem::new(2);
+problem.bound(0, 5.0, 60.0);          // binder, grams
+problem.bound(1, 20.0, 90.0);         // filler, grams
+problem.row(Row::new(vec![3.0, -1.0], Sense::Ge, 0.0, "cohesion threshold"));
+problem.row(Row::new(vec![1.0, 1.0], Sense::Le, 100.0, "lifting limit"));
+
+let Feasible::Region { point, margin } = problem.solve() else { panic!("both can hold") };
+assert!(margin.survives(5.0), "a kitchen scale is good to a gram");
+assert!(point[0] * 3.0 >= point[1]);
+```
+
+A `Feasible::Empty` names the laws it could not satisfy, so a refusal can be read. Run
+`cargo run -p fitkit --example blend`.
 
 ## The crates
 
 | Crate | What it gives you |
 | --- | --- |
-| `fitkit-core` | `Confidence`, `Evidence`, `Reported`, `Refusal`, `Plan` |
+| `fitkit-core` | `Confidence`, `Margin`, `Evidence`, `Reported`, `Refusal`, `Plan` |
 | `fitkit-dp` | `decode_path` for sequences, `optimise_subset` for sets |
-| `fitkit-fit` | `Model` and `Fit`, recovered by `recover` |
+| `fitkit-fit` | `Model` and `Fit`, recovered by `recover` and applied by `apply_plan` |
+| `fitkit-feasible` | `Problem` and `Requirement`, solved for a region and its margin |
 | `fitkit-ledger` | `Law` and `Record`, reached through `ask` |
 | `fitkit-guards` | The invariant checks to call from your tests |
 | `fitkit` | Facade over all of the above |
@@ -103,10 +136,13 @@ These are load bearing. Changes that violate them are regressions.
 - **A beam result is never called optimal.** `SubsetResult::solver` reports which solver ran.
 - **No answer descends from a name.** `forbid_symbols` pins that as a test, because reading the
   call graph once proves nothing about tomorrow.
+- **A margin is a claim that gets tested.** `assert_margin_holds` walks the region the margin
+  describes and requires a point just outside it to fail.
 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md), the six layers and why they are separate
+- [Feasibility](docs/FEASIBILITY.md), regions, margins, and what an equality costs
 - [Writing a law](docs/LAWS.md), what a new measurement must supply
 - [Guards](docs/GUARDS.md), the invariant checks and what each one catches
 - [Performance](docs/PERFORMANCE.md), complexity, benchmarks, and how to stay fast
@@ -114,10 +150,11 @@ These are load bearing. Changes that violate them are regressions.
 ## Development
 
 ```sh
-cargo test --workspace          # 46 tests
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check
+cargo test --workspace --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all --check
 cargo bench -p fitkit-dp
+cargo bench -p fitkit-feasible
 ```
 
 ## License

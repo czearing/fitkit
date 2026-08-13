@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 fitkit-core.workspace = true
 fitkit-dp.workspace = true
+fitkit-feasible.workspace = true
 fitkit-fit.workspace = true
 
 [lints]

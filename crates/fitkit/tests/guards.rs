@@ -2,8 +2,9 @@
 
 use fitkit::prelude::*;
 use fitkit_guards::{
-    assert_beam_matches_exact, assert_deterministic, assert_identity_without_evidence,
-    assert_untrusted_spans_stay_silent, forbid_symbols,
+    assert_beam_matches_exact, assert_deterministic, assert_identity_plan_changes_nothing,
+    assert_identity_without_evidence, assert_margin_holds, assert_untrusted_spans_stay_silent,
+    forbid_symbols,
 };
 
 struct Setpoint {
@@ -114,4 +115,41 @@ fn a_refused_law_yields_no_number() {
 
     assert!(ask(&Density, &298.15).is_ok());
     assert!(ask(&Density, &450.0).is_err(), "extrapolation must refuse, not estimate");
+}
+
+/// A model whose signal can be cut and rejoined gets plan application for free.
+struct Trim;
+
+impl Model for Trim {
+    type Signal = Vec<f64>;
+    type Params = f64;
+
+    fn name(&self) -> &'static str {
+        "trim"
+    }
+
+    fn candidates(&self) -> Vec<f64> {
+        vec![0.5, 1.0, 2.0]
+    }
+
+    fn render(&self, input: &Vec<f64>, params: &f64) -> Vec<f64> {
+        input.iter().map(|value| value * params).collect()
+    }
+}
+
+#[test]
+fn applying_an_identity_plan_changes_nothing() {
+    assert_identity_plan_changes_nothing(&Trim, &vec![1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn a_reported_margin_is_the_error_the_answer_survives() {
+    let mut problem = Problem::new(2);
+    problem.bound(0, 0.0, 8.0);
+    problem.bound(1, 0.0, 8.0);
+    problem.row(Row::new(vec![1.0, 1.0], Sense::Le, 10.0, "total"));
+    problem.row(Row::new(vec![1.0, 1.0], Sense::Ge, 4.0, "enough"));
+    problem.row(Row::new(vec![1.0, -1.0], Sense::Le, 3.0, "balance"));
+
+    assert_margin_holds(&problem);
 }
