@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fitkit-core",
+    "crates/fitkit-dp",
+    "crates/fitkit-fit",
+    "crates/fitkit-ledger",
+    "crates/fitkit-guards",
+    "crates/fitkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/czearing/fitkit"
+authors = ["czearing"]
+
+[workspace.dependencies]
+fitkit-core = { version = "0.1.0", path = "crates/fitkit-core" }
+fitkit-dp = { version = "0.1.0", path = "crates/fitkit-dp" }
+fitkit-fit = { version = "0.1.0", path = "crates/fitkit-fit" }
+fitkit-ledger = { version = "0.1.0", path = "crates/fitkit-ledger" }
+fitkit-guards = { version = "0.1.0", path = "crates/fitkit-guards" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+# Counts and lengths become f64 for scoring. Exact below 2^52, which no pool or span reaches.
+cast_precision_loss = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+

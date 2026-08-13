@@ -1,0 +1,17 @@
+[package]
+name = "fitkit-guards"
+description = "Reusable invariant checks for fitkit engines."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fitkit-core.workspace = true
+fitkit-dp.workspace = true
+fitkit-fit.workspace = true
+
+[lints]
+workspace = true

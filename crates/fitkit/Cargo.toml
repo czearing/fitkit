@@ -1,0 +1,28 @@
+[package]
+name = "fitkit"
+description = "Measure, refuse outside validity, optimise, verify. A skeleton for deterministic domain engines."
+keywords = ["dynamic-programming", "viterbi", "solver", "provenance", "modelling"]
+categories = ["algorithms", "science", "mathematics"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fitkit-core.workspace = true
+fitkit-dp.workspace = true
+fitkit-fit.workspace = true
+fitkit-ledger.workspace = true
+
+[dev-dependencies]
+fitkit-guards.workspace = true
+
+[features]
+default = ["std"]
+std = ["fitkit-core/std", "fitkit-dp/std", "fitkit-fit/std", "fitkit-ledger/std"]
+
+[lints]
+workspace = true

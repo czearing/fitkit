@@ -1,0 +1,20 @@
+[package]
+name = "fitkit-fit"
+description = "The Fit trait: recover model parameters from measured evidence."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fitkit-core.workspace = true
+fitkit-dp.workspace = true
+
+[features]
+default = ["std"]
+std = ["fitkit-core/std", "fitkit-dp/std"]
+
+[lints]
+workspace = true

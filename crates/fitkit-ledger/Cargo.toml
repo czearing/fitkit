@@ -1,0 +1,19 @@
+[package]
+name = "fitkit-ledger"
+description = "Cited measurements and the validity gate around them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fitkit-core.workspace = true
+
+[features]
+default = ["std"]
+std = ["fitkit-core/std"]
+
+[lints]
+workspace = true
