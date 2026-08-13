@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 pub struct Decoded {
     /// One candidate index per step.
     pub path: Vec<usize>,
-    /// Total emission plus weighted transition cost.
+    /// Total emission plus weighted transition cost, infinite if any step was impossible.
     pub cost: f64,
 }
 
@@ -16,7 +16,9 @@ pub struct Decoded {
 /// `transition(from, to)` is the cost of changing between neighbouring steps, scaled by
 /// `transition_weight`. Zero weight follows the evidence exactly; a large weight ignores outliers.
 ///
-/// An empty problem returns an empty path. Non-finite costs are treated as maximally expensive.
+/// A non-finite cost means impossible. Impossible steps are counted rather than summed, so a
+/// passage nothing explains does not erase the decisions around it. Paths are ordered by that
+/// count first and by cost second. An empty problem returns an empty path.
 ///
 /// Runs in `O(steps * states^2)` time. Each cost closure is called once per distinct argument.
 pub fn decode_path<E, T>(
@@ -56,44 +58,65 @@ where
     }
     assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
 
-    let weight = finite(transition_weight, 0.0);
-    let mut jump = vec![0.0; states * states];
-    if weight.abs() > 0.0 && states > 1 {
-        for from in 0..states {
-            for to in 0..states {
-                jump[from * states + to] = weight * finite(transition(from, to), f64::MAX);
-            }
-        }
+    let jump = jump_table(states, transition_weight, transition);
+    let decoded = trellis::<false, _>(steps, states, &jump, &emission);
+    if decoded.cost.is_finite() {
+        return decoded;
     }
+    Decoded { path: trellis::<true, _>(steps, states, &jump, &emission).path, cost: f64::INFINITY }
+}
 
-    let mut cost: Vec<f64> = (0..states).map(|s| finite(emission(0, s), f64::MAX)).collect();
-    let mut next = vec![0.0; states];
+/// One pass of the trellis.
+///
+/// With `COUNT` off this is plain addition, which is exact whenever any path is payable, since an
+/// impossible cell costs infinity and loses every comparison. With it on, impossible steps are
+/// counted rather than summed and ordered ahead of cost, which is what ranks paths when every one
+/// of them is impossible. The second form is a third of the speed, so it runs only in that case.
+#[allow(clippy::cast_possible_truncation)] // states fits u32, asserted by the caller
+fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
+    steps: usize,
+    states: usize,
+    jump: &[f64],
+    emission: &E,
+) -> Decoded {
+    let mut breaks = vec![0_u32; states];
+    let mut cost = vec![0.0; states];
+    for state in 0..states {
+        (breaks[state], cost[state]) = pay::<COUNT>(0, 0.0, emission(0, state));
+    }
+    let (mut next_breaks, mut next_cost) = (breaks.clone(), cost.clone());
     let mut back = vec![0_u32; steps * states];
 
     for step in 1..steps {
-        let row = step * states;
         for to in 0..states {
-            let mut best = f64::INFINITY;
-            let mut best_from = 0;
+            let mut best_breaks = if COUNT { u32::MAX } else { 0 };
+            let (mut best_cost, mut best_from) = (f64::INFINITY, 0);
             for (from, &previous) in cost.iter().enumerate() {
-                let total = previous + jump[from * states + to];
-                if total < best {
-                    best = total;
-                    best_from = from;
+                let carried = if COUNT { breaks[from] } else { 0 };
+                let (b, c) = pay::<COUNT>(carried, previous, jump[from * states + to]);
+                if b < best_breaks || (b == best_breaks && c < best_cost) {
+                    (best_breaks, best_cost, best_from) = (b, c, from);
                 }
             }
-            next[to] = best + finite(emission(step, to), f64::MAX);
-            back[row + to] = best_from as u32;
+            (best_breaks, best_cost) = pay::<COUNT>(best_breaks, best_cost, emission(step, to));
+            next_cost[to] = best_cost;
+            if COUNT {
+                next_breaks[to] = best_breaks;
+            }
+            back[step * states + to] = best_from as u32;
         }
-        cost.copy_from_slice(&next);
+        cost.copy_from_slice(&next_cost);
+        if COUNT {
+            breaks.copy_from_slice(&next_breaks);
+        }
     }
 
-    let mut end = 0;
-    let mut total = f64::INFINITY;
-    for (state, &value) in cost.iter().enumerate() {
-        if value < total {
-            total = value;
-            end = state;
+    let mut total_breaks = if COUNT { u32::MAX } else { 0 };
+    let (mut end, mut total) = (0, f64::INFINITY);
+    for state in 0..states {
+        let b = if COUNT { breaks[state] } else { 0 };
+        if b < total_breaks || (b == total_breaks && cost[state] < total) {
+            (total_breaks, total, end) = (b, cost[state], state);
         }
     }
 
@@ -111,7 +134,7 @@ where
 ///
 /// The answer to "how far can this measurement be wrong before the decode changes". A step with a
 /// margin of zero has a tied runner up and is decided by nothing. Infinite means no alternative
-/// exists, which is a missing candidate rather than a safe result.
+/// exists at the same level of possibility, which is a missing candidate rather than a safe result.
 ///
 /// Costs a forward and a backward pass, so it is twice the work of [`decode_path`] and holds
 /// `O(steps * states)` intermediates. Call it when reporting, not in the inner loop.
@@ -130,47 +153,55 @@ where
         return Vec::new();
     }
 
-    let weight = finite(transition_weight, 0.0);
-    let mut jump = vec![0.0; states * states];
-    if weight.abs() > 0.0 && states > 1 {
-        for from in 0..states {
-            for to in 0..states {
-                jump[from * states + to] = weight * finite(transition(from, to), f64::MAX);
-            }
-        }
+    let jump = jump_table(states, transition_weight, transition);
+    let mut emit_breaks = vec![0_u32; steps * states];
+    let mut emit_cost = vec![0.0; steps * states];
+    for at in 0..steps * states {
+        (emit_breaks[at], emit_cost[at]) = pay::<true>(0, 0.0, emission(at / states, at % states));
     }
 
-    let emit: Vec<f64> =
-        (0..steps * states).map(|i| finite(emission(i / states, i % states), f64::MAX)).collect();
-
-    let mut forward = emit.clone();
+    let (mut forward_breaks, mut forward_cost) = (emit_breaks.clone(), emit_cost.clone());
     for step in 1..steps {
         for to in 0..states {
-            let mut best = f64::INFINITY;
+            let (mut best_breaks, mut best_cost) = (u32::MAX, f64::INFINITY);
             for from in 0..states {
-                best = best.min(forward[(step - 1) * states + from] + jump[from * states + to]);
+                let at = (step - 1) * states + from;
+                let (b, c) =
+                    pay::<true>(forward_breaks[at], forward_cost[at], jump[from * states + to]);
+                if b < best_breaks || (b == best_breaks && c < best_cost) {
+                    (best_breaks, best_cost) = (b, c);
+                }
             }
-            forward[step * states + to] += best;
+            forward_breaks[step * states + to] += best_breaks;
+            forward_cost[step * states + to] += best_cost;
         }
     }
 
-    let mut backward = emit.clone();
+    let (mut back_breaks, mut back_cost) = (emit_breaks.clone(), emit_cost.clone());
     for step in (0..steps - 1).rev() {
         for from in 0..states {
-            let mut best = f64::INFINITY;
+            let (mut best_breaks, mut best_cost) = (u32::MAX, f64::INFINITY);
             for to in 0..states {
-                best = best.min(jump[from * states + to] + backward[(step + 1) * states + to]);
+                let at = (step + 1) * states + to;
+                let (b, c) = pay::<true>(back_breaks[at], back_cost[at], jump[from * states + to]);
+                if b < best_breaks || (b == best_breaks && c < best_cost) {
+                    (best_breaks, best_cost) = (b, c);
+                }
             }
-            backward[step * states + from] += best;
+            back_breaks[step * states + from] += best_breaks;
+            back_cost[step * states + from] += best_cost;
         }
     }
 
     (0..steps)
         .map(|step| {
-            let (mut best, mut runner_up) = (f64::INFINITY, f64::INFINITY);
+            let (mut best, mut runner_up) = ((u32::MAX, f64::INFINITY), (u32::MAX, f64::INFINITY));
             for state in 0..states {
                 let at = step * states + state;
-                let total = forward[at] + backward[at] - emit[at];
+                let total = (
+                    forward_breaks[at] + back_breaks[at] - emit_breaks[at],
+                    forward_cost[at] + back_cost[at] - emit_cost[at],
+                );
                 if total < best {
                     runner_up = best;
                     best = total;
@@ -178,24 +209,38 @@ where
                     runner_up = total;
                 }
             }
-            if !best.is_finite() {
-                0.0
-            } else if runner_up.is_finite() {
-                runner_up - best
-            } else {
+            if runner_up.0 != best.0 || !runner_up.1.is_finite() {
                 f64::INFINITY
+            } else {
+                runner_up.1 - best.1
             }
         })
         .collect()
 }
 
+/// Add one step to a running total. With `COUNT` on, a step that cannot be paid is counted instead
+/// of summed, which keeps it from erasing the costs around it.
 #[inline]
-fn finite(value: f64, fallback: f64) -> f64 {
-    if value.is_finite() {
-        value
+fn pay<const COUNT: bool>(breaks: u32, cost: f64, step: f64) -> (u32, f64) {
+    if COUNT && !step.is_finite() {
+        (breaks + 1, cost)
     } else {
-        fallback
+        (breaks, cost + step)
     }
+}
+
+/// Transitions from every state to every state. Non-finite entries mean the change is impossible.
+fn jump_table<T: Fn(usize, usize) -> f64>(states: usize, weight: f64, transition: T) -> Vec<f64> {
+    let mut jump = vec![0.0; states * states];
+    if weight.is_finite() && weight != 0.0 && states > 1 {
+        for from in 0..states {
+            for to in 0..states {
+                let cost = weight * transition(from, to);
+                jump[from * states + to] = if cost.is_nan() { f64::INFINITY } else { cost };
+            }
+        }
+    }
+    jump
 }
 
 #[cfg(test)]
@@ -288,6 +333,104 @@ mod tests {
             best = best.min(cost);
         }
         assert!((decoded.cost - best).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_step_nothing_explains_does_not_erase_the_steps_after_it() {
+        let emission = |step: usize, state: usize| match step {
+            1 => f64::INFINITY,
+            _ => f64::from(u8::from(state != 1)) * 500.0,
+        };
+
+        let decoded = decode_path_with_cost(3, 2, 0.0, emission, |_, _| 0.0);
+
+        assert_eq!(decoded.path, vec![1, 0, 1]);
+        assert!(decoded.cost.is_infinite(), "an impossible step costs infinity");
+    }
+
+    #[test]
+    fn impossible_steps_are_counted_before_cost_is_compared() {
+        let emission = |_: usize, state: usize| match state {
+            0 => f64::INFINITY,
+            _ => 1e9,
+        };
+
+        let path = decode_path(4, 2, 0.0, emission, |_, _| 0.0);
+
+        assert_eq!(path, vec![1, 1, 1, 1], "a payable step beats a cheaper impossible one");
+    }
+
+    #[test]
+    fn the_decoder_matches_brute_force_when_some_steps_are_impossible() {
+        let (steps, states, weight) = (5, 3, 0.5);
+        let emission = |step: usize, state: usize| {
+            if (step * 3 + state) % 7 == 0 {
+                f64::INFINITY
+            } else {
+                f64::from(u32::try_from((step * 5 + state * 11) % 13).unwrap())
+            }
+        };
+        let transition = |from: usize, to: usize| f64::from(u8::from(from != to));
+
+        let decoded = decode_path_with_cost(steps, states, weight, emission, transition);
+        let margins = decode_margins(steps, states, weight, emission, transition);
+
+        let score = |path: &[usize]| {
+            let (mut breaks, mut cost) = (0_u32, emission(0, path[0]));
+            if !cost.is_finite() {
+                breaks += 1;
+                cost = 0.0;
+            }
+            for step in 1..steps {
+                for each in
+                    [emission(step, path[step]), weight * transition(path[step - 1], path[step])]
+                {
+                    if each.is_finite() {
+                        cost += each;
+                    } else {
+                        breaks += 1;
+                    }
+                }
+            }
+            (breaks, cost)
+        };
+
+        let better = |a: (u32, f64), b: (u32, f64)| if (a.0, a.1) < (b.0, b.1) { a } else { b };
+        let every_path = |fixed: Option<(usize, usize)>| {
+            let mut best = (u32::MAX, f64::INFINITY);
+            for encoded in 0..states.pow(u32::try_from(steps).unwrap()) {
+                let mut rest = encoded;
+                let mut path = vec![0; steps];
+                for slot in &mut path {
+                    *slot = rest % states;
+                    rest /= states;
+                }
+                if let Some((step, state)) = fixed {
+                    if path[step] != state {
+                        continue;
+                    }
+                }
+                best = better(best, score(&path));
+            }
+            best
+        };
+
+        let best = every_path(None);
+        assert_eq!(score(&decoded.path), best, "the decode is the best path, breaks first");
+
+        for (step, &margin) in margins.iter().enumerate() {
+            let alternative = (0..states)
+                .filter(|&state| state != decoded.path[step])
+                .map(|state| every_path(Some((step, state))))
+                .fold((u32::MAX, f64::INFINITY), better);
+            let expected =
+                if alternative.0 == best.0 { alternative.1 - best.1 } else { f64::INFINITY };
+            assert!(
+                (margin - expected).abs() < 1e-9
+                    || (margin.is_infinite() && expected.is_infinite()),
+                "step {step} margin {margin} is not {expected}"
+            );
+        }
     }
 
     #[test]

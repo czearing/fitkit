@@ -11,7 +11,7 @@ use fitkit_dp::{decode_margins, decode_path};
 
 /// A signal that can be cut into spans and put back together.
 ///
-/// Implementing it is what unlocks [`Model::apply_plan`]. Implemented here for [`Vec`], which
+/// [`Model::apply_plan`] needs it. Implemented here for [`Vec`], which
 /// covers samples, frames, and stages.
 pub trait Segmented: Clone {
     /// Length, in the units spans are counted in.

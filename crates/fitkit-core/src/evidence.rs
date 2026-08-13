@@ -24,10 +24,10 @@ impl Span {
         Self::new(0, len)
     }
 
-    /// Indices covered.
+    /// Indices covered. Zero if the fields were set inverted by hand.
     #[inline]
     pub const fn len(self) -> usize {
-        self.end - self.start
+        self.end.saturating_sub(self.start)
     }
 
     /// Whether the span covers nothing.
@@ -87,6 +87,9 @@ mod tests {
     #[test]
     fn an_inverted_span_is_empty() {
         assert!(Span::new(90, 10).is_empty());
+        let by_hand = Span { start: 90, end: 10 };
+        assert!(by_hand.is_empty());
+        assert_eq!(by_hand.len(), 0, "the fields are public, so length cannot underflow");
     }
 
     #[test]

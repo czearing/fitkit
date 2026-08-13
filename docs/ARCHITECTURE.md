@@ -57,6 +57,15 @@ Plan<Params>
 that the evidence measures outright belongs there, so the result is the measured value rather than
 the nearest grid point.
 
+## Impossible is not expensive
+
+A cost of infinity means a candidate cannot explain a step, which is different from explaining it
+badly. Summing the two together lets one unexplainable step erase every decision after it, since a
+large enough running total stops distinguishing anything added to it. Impossible steps are counted
+and compared before cost, so a passage nothing explains leaves the rest of the path intact and the
+total is reported as infinite. The count costs nothing in the ordinary case: it is only reached
+when no path at all is payable.
+
 ## Three shapes of problem
 
 `decode_path` is for problems with an order: which setting held over each span. `optimise_subset`

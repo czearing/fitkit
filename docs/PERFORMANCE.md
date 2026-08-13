@@ -22,7 +22,7 @@ Apple M1 Pro, `--release` with fat LTO and one codegen unit. Reproduce with
 | Benchmark | Time | Throughput |
 | --- | --- | --- |
 | `decode_path` 4096 steps, 16 states | 391 us | 2.7 transitions/ns |
-| `decode_path` 512 steps, 64 states | 1.86 ms | 1.1 transitions/ns |
+| `decode_path` 512 steps, 64 states | 1.84 ms | 1.1 transitions/ns |
 | `optimise_subset` exact, 20 items | 1.57 ms | 1.05 M subsets in 1.5 ms |
 | `optimise_subset` beam, 64 items, width 128 | 243 us | 4096 states expanded |
 | `Problem::solve` 8 variables, 8 rows | 6.5 us | affordable inside a search loop |
@@ -45,6 +45,10 @@ for once rather than `steps` times.
 `count_ones` is one `popcnt`.
 
 **No allocation in any inner loop.** Every buffer is sized once up front.
+
+**The transition table is indexed by source state.** Indexing it by destination makes the inner
+loop contiguous, which sounds faster and measured 10 percent slower, because the per row slice
+costs more than the stride saves at every state count worth using.
 
 **Nothing is generic over a float type.** One monomorphisation, so the inner loop is inspectable
 in the disassembly and stays that way.
