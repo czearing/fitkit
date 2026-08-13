@@ -16,9 +16,10 @@ pub struct Decoded {
 /// `transition(from, to)` is the cost of changing between neighbouring steps, scaled by
 /// `transition_weight`. Zero weight follows the evidence exactly; a large weight ignores outliers.
 ///
-/// A non-finite cost means impossible. Impossible steps are counted rather than summed, so a
-/// passage nothing explains does not erase the decisions around it. Paths are ordered by that
-/// count first and by cost second. An empty problem returns an empty path.
+/// A cost that is not finite means impossible, negative infinity included, so no cost can be
+/// better than free. Impossible steps are counted rather than summed, so a passage nothing
+/// explains does not erase the decisions around it. Paths are ordered by that count first and by
+/// cost second. An empty problem returns an empty path.
 ///
 /// Runs in `O(steps * states^2)` time. Each cost closure is called once per distinct argument.
 pub fn decode_path<E, T>(
@@ -82,7 +83,7 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
     let mut breaks = vec![0_u32; states];
     let mut cost = vec![0.0; states];
     for state in 0..states {
-        (breaks[state], cost[state]) = pay::<COUNT>(0, 0.0, emission(0, state));
+        (breaks[state], cost[state]) = pay::<COUNT>(0, 0.0, payable(emission(0, state)));
     }
     let (mut next_breaks, mut next_cost) = (breaks.clone(), cost.clone());
     let mut back = vec![0_u32; steps * states];
@@ -98,7 +99,8 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
                     (best_breaks, best_cost, best_from) = (b, c, from);
                 }
             }
-            (best_breaks, best_cost) = pay::<COUNT>(best_breaks, best_cost, emission(step, to));
+            let emitted = payable(emission(step, to));
+            (best_breaks, best_cost) = pay::<COUNT>(best_breaks, best_cost, emitted);
             next_cost[to] = best_cost;
             if COUNT {
                 next_breaks[to] = best_breaks;
@@ -157,7 +159,8 @@ where
     let mut emit_breaks = vec![0_u32; steps * states];
     let mut emit_cost = vec![0.0; steps * states];
     for at in 0..steps * states {
-        (emit_breaks[at], emit_cost[at]) = pay::<true>(0, 0.0, emission(at / states, at % states));
+        let emitted = payable(emission(at / states, at % states));
+        (emit_breaks[at], emit_cost[at]) = pay::<true>(0, 0.0, emitted);
     }
 
     let (mut forward_breaks, mut forward_cost) = (emit_breaks.clone(), emit_cost.clone());
@@ -218,6 +221,18 @@ where
         .collect()
 }
 
+/// Normalise a cost, so that anything not finite means impossible rather than cheap.
+///
+/// Applied where costs enter, not where they are added, so the decode stays a plain sum.
+#[inline]
+fn payable(cost: f64) -> f64 {
+    if cost.is_finite() {
+        cost
+    } else {
+        f64::INFINITY
+    }
+}
+
 /// Add one step to a running total. With `COUNT` on, a step that cannot be paid is counted instead
 /// of summed, which keeps it from erasing the costs around it.
 #[inline]
@@ -235,8 +250,7 @@ fn jump_table<T: Fn(usize, usize) -> f64>(states: usize, weight: f64, transition
     if weight.is_finite() && weight != 0.0 && states > 1 {
         for from in 0..states {
             for to in 0..states {
-                let cost = weight * transition(from, to);
-                jump[from * states + to] = if cost.is_nan() { f64::INFINITY } else { cost };
+                jump[from * states + to] = payable(weight * transition(from, to));
             }
         }
     }
@@ -469,6 +483,21 @@ mod tests {
                 "step {step} reported margin {margin}"
             );
         }
+    }
+
+    #[test]
+    fn a_negative_infinity_cost_does_not_corrupt_a_payable_decode() {
+        let emission = |step: usize, state: usize| match (step, state) {
+            (0, 0) => f64::NEG_INFINITY,
+            (1, 0) => 10.0,
+            (1, 1) => 5.0,
+            _ => 0.0,
+        };
+
+        let decoded = decode_path_with_cost(2, 2, 0.0, emission, |_, _| 0.0);
+
+        assert_eq!(decoded.path, vec![1, 1], "no cost is better than free");
+        assert!((decoded.cost - 5.0).abs() < f64::EPSILON, "the cost is the payable path");
     }
 
     #[test]
