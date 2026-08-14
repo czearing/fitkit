@@ -66,6 +66,11 @@ pub trait Model {
     /// Silent controls are skipped, so an identity plan returns the input untouched. Each span is
     /// rendered from the input rather than from the result, so settings never compound. Override
     /// when a setting outlives its span, such as a tail that has to reach the next one.
+    ///
+    /// # Panics
+    ///
+    /// If [`render`](Model::render) returns a different length than it was given, which would
+    /// shift every span after it.
     fn apply_plan(&self, input: &Self::Signal, plan: &Plan<Self::Params>) -> Self::Signal
     where
         Self::Signal: Segmented,
@@ -75,7 +80,15 @@ pub trait Model {
             if control.is_silent() {
                 continue;
             }
-            let rendered = self.render(&input.slice(control.span), &control.params);
+            let part = input.slice(control.span);
+            let extent = part.extent();
+            let rendered = self.render(&part, &control.params);
+            assert_eq!(
+                rendered.extent(),
+                extent,
+                "{} rendered a span of a new length",
+                self.name()
+            );
             out.splice(control.span, rendered);
         }
         out
@@ -295,6 +308,36 @@ mod tests {
         };
         let applied = model.apply_plan(&vec![1.0, 1.0, 1.0, 1.0], &plan);
         assert_eq!(applied, [2.0, 2.0, 3.0, 3.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "rendered a span of a new length")]
+    fn a_render_that_changes_length_is_caught_rather_than_shifting_later_spans() {
+        struct Grows;
+        impl Model for Grows {
+            type Signal = Vec<f64>;
+            type Params = ();
+            fn name(&self) -> &'static str {
+                "grows"
+            }
+            fn candidates(&self) -> Vec<()> {
+                vec![()]
+            }
+            fn render(&self, input: &Vec<f64>, (): &()) -> Vec<f64> {
+                let mut longer = input.clone();
+                longer.push(0.0);
+                longer
+            }
+        }
+
+        let plan = Plan {
+            controls: vec![Control {
+                span: Span::new(0, 1),
+                params: (),
+                confidence: Confidence::FULL,
+            }],
+        };
+        let _ = Grows.apply_plan(&vec![1.0, 1.0], &plan);
     }
 
     #[test]

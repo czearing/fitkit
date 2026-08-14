@@ -85,10 +85,10 @@ Measured on an M1 Pro, release profile, `cargo bench -p fitkit-feasible`.
 
 | Problem | Time |
 | --- | --- |
-| 8 variables, 8 rows | 6.5 us |
-| 24 variables, 24 rows | 59 us |
-| 48 variables, 48 rows | 476 us |
-| 64 variables, 96 rows | 1.28 ms |
+| 8 variables, 8 rows | 5.8 us |
+| 24 variables, 24 rows | 53 us |
+| 48 variables, 48 rows | 397 us |
+| 64 variables, 96 rows | 1.08 ms |
 
 Microseconds at small sizes is what makes a feasibility check affordable inside a search loop,
 which is the case that rules out linking, installing, or spawning an external solver.

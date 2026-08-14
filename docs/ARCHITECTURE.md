@@ -30,7 +30,9 @@ can quietly substitute its own pipeline.
 **Applying a plan is a trait method, and can be.** `Model::apply_plan` renders each span from the
 input rather than from the running result, so settings never compound. A setting that outlives its
 span, such as a tail that reaches the next one, overrides it. That is the one place a domain
-legitimately needs to change how the result is assembled, and it cannot reach the search.
+legitimately needs to change how the result is assembled, and it cannot reach the search. A render
+that returns a different length than it was given panics, since it would silently shift every span
+after it.
 
 ## The recovery pipeline
 

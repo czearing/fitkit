@@ -25,8 +25,8 @@ Apple M1 Pro, `--release` with fat LTO and one codegen unit. Reproduce with
 | `decode_path` 512 steps, 64 states | 1.84 ms | 1.1 transitions/ns |
 | `optimise_subset` exact, 20 items | 1.57 ms | 1.05 M subsets in 1.5 ms |
 | `optimise_subset` beam, 64 items, width 128 | 243 us | 4096 states expanded |
-| `Problem::solve` 8 variables, 8 rows | 6.5 us | affordable inside a search loop |
-| `Problem::solve` 48 variables, 48 rows | 476 us | |
+| `Problem::solve` 8 variables, 8 rows | 5.8 us | affordable inside a search loop |
+| `Problem::solve` 48 variables, 48 rows | 397 us | |
 
 The 64 state case is slower per transition because the transition table reaches 32 KB and stops
 fitting comfortably in L1.
