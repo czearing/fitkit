@@ -305,6 +305,16 @@ where
 
     for step in 1..steps {
         for to in 0..states {
+            // A state the evidence rules out cannot be reached at any price, so the search for how
+            // it might have been reached is wasted. Asking what a step costs before asking how to
+            // get there is what makes a large state space affordable: models that give most states
+            // an infinite emission at most steps now pay only for the states still in play.
+            let here = payable(emission(step, to));
+            if !here.is_finite() {
+                next[to] = f64::INFINITY;
+                back[step * states + to] = 0;
+                continue;
+            }
             let (mut best, mut best_from) = (f64::INFINITY, 0_u32);
             for &from in &reached[to] {
                 let previous = cost[from as usize];
@@ -316,7 +326,7 @@ where
                     (best, best_from) = (total, from);
                 }
             }
-            next[to] = best + payable(emission(step, to));
+            next[to] = best + here;
             back[step * states + to] = best_from;
         }
         cost.copy_from_slice(&next);
