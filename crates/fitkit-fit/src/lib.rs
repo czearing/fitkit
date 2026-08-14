@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use fitkit_core::{Control, Evidence, Margin, Plan, Span};
-use fitkit_dp::{decode_margins, decode_path};
+use fitkit_dp::{decode_margins, decode_path, decode_path_into};
 
 /// A signal that can be cut into spans and put back together.
 ///
@@ -129,6 +129,19 @@ pub trait Fit: Model {
     fn settle(&self, plan: Plan<Self::Params>, _reference: &Self::Signal) -> Plan<Self::Params> {
         plan
     }
+
+    /// Which candidates a step may be reached from, by index into [`Model::candidates`].
+    ///
+    /// Returning nothing means any of them, which is the ordinary dense search and the default.
+    /// Answering is worthwhile when a candidate carries context as well as a label, since the
+    /// context after a step is usually decided by the context before it together with the label
+    /// chosen, and every other way of reaching it is not expensive but impossible.
+    ///
+    /// A model that answers must answer for every candidate. Naming a candidate outside the grid
+    /// is a fault in the model and panics the search.
+    fn into(&self, _to: &Self::Params) -> Option<Vec<u32>> {
+        None
+    }
 }
 
 /// Recover a plan from a reference.
@@ -144,13 +157,28 @@ pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Plan<F::Params> {
         return Plan::identity();
     }
 
-    let path = decode_path(
-        evidence.len(),
-        candidates.len(),
-        model.transition_weight(),
-        |step, state| model.emission(&evidence[step].value, &candidates[state]),
-        |from, to| model.transition(&candidates[from], &candidates[to]),
-    );
+    let emission =
+        |step: usize, state: usize| model.emission(&evidence[step].value, &candidates[state]);
+    let transition = |from: usize, to: usize| model.transition(&candidates[from], &candidates[to]);
+    let path = if model.into(&candidates[0]).is_some() {
+        decode_path_into(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+            |to| model.into(&candidates[to]).unwrap_or_default(),
+        )
+        .path
+    } else {
+        decode_path(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+        )
+    };
 
     let controls = evidence
         .iter()

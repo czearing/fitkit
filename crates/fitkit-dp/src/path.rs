@@ -245,6 +245,100 @@ fn pay<const COUNT: bool>(breaks: u32, cost: f64, step: f64) -> (u32, f64) {
 }
 
 /// Transitions from every state to every state. Non-finite entries mean the change is impossible.
+/// Decode the lowest-cost path when most changes of state are impossible.
+///
+/// As [`decode_path_with_cost`], except that `into(to)` names the states a step may be reached
+/// from. Every other state is treated as unreachable rather than as expensive, so the transition
+/// closure is never asked about a pair that cannot occur.
+///
+/// This is what a search over structured state needs. When a state carries context as well as a
+/// label, such as a grammatical category together with what the clause around it has already seen,
+/// the number of states multiplies but the number of ways to reach any one of them does not: the
+/// context that follows is decided by the context before it and the label chosen. A dense decode
+/// pays `states^2` per step regardless and spends nearly all of it proving that impossible moves
+/// are impossible.
+///
+/// Runs in `O(steps * sum of the sizes of into)` time. Each cost closure is called once per
+/// distinct argument. Passing every state for every step gives exactly [`decode_path_with_cost`],
+/// at the cost of building the lists.
+///
+/// # Panics
+///
+/// If `states` exceeds `u32::MAX`, the width of the backpointer table, or if `into` names a state
+/// at or beyond `states`.
+#[allow(clippy::cast_possible_truncation)] // states is asserted to fit u32 below
+pub fn decode_path_into<E, T, I>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    into: I,
+) -> Decoded
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    I: Fn(usize) -> Vec<u32>,
+{
+    if steps == 0 || states == 0 {
+        return Decoded { path: Vec::new(), cost: 0.0 };
+    }
+    assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
+
+    let reached: Vec<Vec<u32>> = (0..states).map(&into).collect();
+    for list in &reached {
+        for &from in list {
+            assert!((from as usize) < states, "a state outside the grid was named as reachable");
+        }
+    }
+    let weighted = |from: usize, to: usize| {
+        if transition_weight.is_finite() && transition_weight != 0.0 && states > 1 {
+            payable(transition_weight * transition(from, to))
+        } else {
+            0.0
+        }
+    };
+
+    let mut cost: Vec<f64> = (0..states).map(|state| payable(emission(0, state))).collect();
+    let mut next = cost.clone();
+    let mut back = vec![0_u32; steps * states];
+
+    for step in 1..steps {
+        for to in 0..states {
+            let (mut best, mut best_from) = (f64::INFINITY, 0_u32);
+            for &from in &reached[to] {
+                let previous = cost[from as usize];
+                if !previous.is_finite() {
+                    continue;
+                }
+                let total = previous + weighted(from as usize, to);
+                if total < best {
+                    (best, best_from) = (total, from);
+                }
+            }
+            next[to] = best + payable(emission(step, to));
+            back[step * states + to] = best_from;
+        }
+        cost.copy_from_slice(&next);
+    }
+
+    let (mut end, mut total) = (0, f64::INFINITY);
+    for (state, &paid) in cost.iter().enumerate() {
+        if paid < total {
+            (total, end) = (paid, state);
+        }
+    }
+
+    let mut path = vec![0; steps];
+    path[steps - 1] = end;
+    for step in (1..steps).rev() {
+        end = back[step * states + end] as usize;
+        path[step - 1] = end;
+    }
+
+    Decoded { path, cost: total }
+}
+
 fn jump_table<T: Fn(usize, usize) -> f64>(states: usize, weight: f64, transition: T) -> Vec<f64> {
     let mut jump = vec![0.0; states * states];
     if weight.is_finite() && weight != 0.0 && states > 1 {
@@ -261,7 +355,50 @@ fn jump_table<T: Fn(usize, usize) -> f64>(states: usize, weight: f64, transition
 mod tests {
     use alloc::vec;
 
-    use super::{decode_margins, decode_path, decode_path_with_cost};
+    use super::{decode_margins, decode_path, decode_path_into, decode_path_with_cost};
+
+    #[test]
+    fn naming_every_state_decodes_exactly_as_the_dense_search_does() {
+        let observed = [1.0, 0.0, 1.0, 1.0, 0.0];
+        let emission = |step: usize, state: usize| (observed[step] - state as f64).abs();
+        let transition = |from: usize, to: usize| (from as f64 - to as f64).abs();
+        let dense = decode_path_with_cost(5, 3, 1.0, emission, transition);
+        let sparse = decode_path_into(5, 3, 1.0, emission, transition, |_| vec![0, 1, 2]);
+        assert_eq!(dense.path, sparse.path);
+        assert!((dense.cost - sparse.cost).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_state_no_one_can_reach_is_never_chosen() {
+        // State 1 explains every step perfectly but nothing leads into it, so the path has to go
+        // around it after the first step.
+        let emission = |_: usize, state: usize| if state == 1 { 0.0 } else { 1.0 };
+        let transition = |_: usize, _: usize| 0.0;
+        let decoded = decode_path_into(4, 3, 1.0, emission, transition, |to| {
+            if to == 1 {
+                vec![]
+            } else {
+                vec![0, 2]
+            }
+        });
+        assert_eq!(&decoded.path[1..], &[0, 0, 0]);
+    }
+
+    #[test]
+    fn a_forced_chain_is_followed_even_where_the_evidence_disagrees() {
+        // Each state may only be reached from the one before it, so the path is decided by the
+        // shape of the search rather than by what any step measured.
+        let emission = |_: usize, state: usize| if state == 0 { 0.0 } else { 1.0 };
+        let transition = |_: usize, _: usize| 0.0;
+        let decoded = decode_path_into(4, 4, 1.0, emission, transition, |to| {
+            if to == 0 {
+                vec![]
+            } else {
+                vec![to as u32 - 1]
+            }
+        });
+        assert_eq!(decoded.path, vec![0, 1, 2, 3]);
+    }
 
     #[test]
     fn with_no_resistance_the_path_follows_the_evidence() {
