@@ -188,7 +188,12 @@ impl Scale {
             cost.strain(),
             self.breach
         );
-        f64::from(cost.breaches()).mul_add(self.breach, cost.strain())
+        // Not mul_add: this crate builds without std, where the fused instruction is unavailable,
+        // and the two terms are held apart by the scale rather than by the last bit of precision.
+        #[allow(clippy::suboptimal_flops)]
+        {
+            f64::from(cost.breaches()) * self.breach + cost.strain()
+        }
     }
 }
 
