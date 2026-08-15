@@ -30,6 +30,90 @@ pub fn forbid_symbols(sources: &[(&str, &str)], banned: &[&str]) {
     }
 }
 
+/// Panic if any function signature derives one thing from another.
+///
+/// [`forbid_symbols`] bans a spelling. This bans a SHAPE, which is what the invariant "no answer
+/// descends from a name" actually says: not that a word is absent, but that no function turns one
+/// kind of input into a kind of output. A substring ban cannot express that. It either misses the
+/// pattern or fires on every incidental mention.
+///
+/// A signature offends when its return type contains `returns` and its parameters contain any of
+/// `accepts`. Each string in `exempt` is removed from the parameters first, for the case where a
+/// banned type is present but demonstrably a passenger, such as a label carried alongside the
+/// measurement that actually decides.
+///
+/// Line comments are stripped before parsing, so prose about the banned pattern is not evidence
+/// against the file discussing it. Signatures are flattened first, so one broken across lines by a
+/// formatter is still read whole.
+///
+/// ```
+/// # use fitkit_guards::forbid_derivations_from;
+/// forbid_derivations_from(
+///     &[("solver.rs", "fn limits(sample: &Measured) -> Vec<Requirement> { todo!() }")],
+///     "Requirement",
+///     &["&str", "String", "name:"],
+///     &[],
+/// );
+/// ```
+///
+/// # Panics
+///
+/// If any signature derives `returns` from one of `accepts`, naming every offender.
+pub fn forbid_derivations_from(
+    sources: &[(&str, &str)],
+    returns: &str,
+    accepts: &[&str],
+    exempt: &[&str],
+) {
+    let mut offenders = Vec::new();
+    for (path, text) in sources {
+        for signature in signatures(&code_only(text)) {
+            let Some(arrow) = signature.find("->") else {
+                continue;
+            };
+            let (params, returned) = signature.split_at(arrow);
+            if !returned.contains(returns) {
+                continue;
+            }
+            let mut params = params.to_string();
+            for allowed in exempt {
+                params = params.replace(allowed, " ");
+            }
+            if accepts.iter().any(|banned| params.contains(banned)) {
+                offenders.push(format!("{path}: fn {}", signature.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a function derives {returns} from an input it must not, so an answer can descend from \
+         that input:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Strip line comments, so prose about a banned pattern is not read as code.
+fn code_only(text: &str) -> String {
+    text.lines()
+        .map(|line| line.find("//").map_or(line, |cut| &line[..cut]))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every `fn` signature as one flattened string, ending at the body or at the
+/// semicolon of a declaration, whichever comes first.
+fn signatures(code: &str) -> Vec<String> {
+    let flat = code.replace('\n', " ");
+    let mut out = Vec::new();
+    let mut rest = flat.as_str();
+    while let Some(start) = rest.find("fn ") {
+        rest = &rest[start + 3..];
+        let end = rest.find('{').unwrap_or(rest.len()).min(rest.find(';').unwrap_or(rest.len()));
+        out.push(rest[..end].to_string());
+    }
+    out
+}
+
 /// Panic unless a model with no evidence recovers the identity plan.
 ///
 /// # Panics
@@ -200,7 +284,8 @@ mod tests {
     use super::{
         assert_beam_matches_exact, assert_deterministic, assert_friction_never_reaches_a_rule,
         assert_identity_plan_changes_nothing, assert_identity_without_evidence,
-        assert_margin_holds, assert_untrusted_spans_stay_silent, forbid_symbols,
+        assert_margin_holds, assert_untrusted_spans_stay_silent, forbid_derivations_from,
+        forbid_symbols,
     };
     use super::{Cost, Scale};
 
@@ -326,6 +411,58 @@ mod tests {
     #[should_panic(expected = "reaches lookup_by_name")]
     fn a_banned_symbol_is_caught() {
         forbid_symbols(&[("solver.rs", "let x = lookup_by_name(food);")], &["lookup_by_name"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "derives Requirement")]
+    fn a_signature_that_derives_an_answer_from_a_name_is_caught() {
+        forbid_derivations_from(
+            &[("intent.rs", "fn wanted(dish: &str) -> Vec<Requirement> { todo!() }")],
+            "Requirement",
+            &["&str", "String", "name:"],
+            &[],
+        );
+    }
+
+    #[test]
+    fn a_signature_broken_across_lines_is_still_read_whole() {
+        let source = "fn wanted(\n    dish: &str,\n) -> Vec<Requirement> {\n    todo!()\n}";
+        let caught = std::panic::catch_unwind(|| {
+            forbid_derivations_from(&[("intent.rs", source)], "Requirement", &["&str"], &[]);
+        });
+        assert!(caught.is_err(), "a formatter must not be able to hide a signature");
+    }
+
+    #[test]
+    fn prose_about_the_banned_shape_is_not_evidence_against_it() {
+        // The comment names the exact pattern; only executable text counts.
+        let source =
+            "// fn wanted(dish: &str) -> Vec<Requirement>\nfn ok(m: &Measured) -> f64 { 0.0 }";
+        forbid_derivations_from(&[("notes.rs", source)], "Requirement", &["&str"], &[]);
+    }
+
+    #[test]
+    fn an_exempt_parameter_is_a_passenger_rather_than_an_offender() {
+        // The label rides along with the measurement that actually decides.
+        forbid_derivations_from(
+            &[(
+                "blend.rs",
+                "fn wanted(rows: &[(String, Measured)]) -> Vec<Requirement> { todo!() }",
+            )],
+            "Requirement",
+            &["String"],
+            &["(String, Measured)"],
+        );
+    }
+
+    #[test]
+    fn a_function_that_returns_something_else_is_not_examined() {
+        forbid_derivations_from(
+            &[("report.rs", "fn title(name: &str) -> String { name.into() }")],
+            "Requirement",
+            &["&str"],
+            &[],
+        );
     }
 
     #[test]

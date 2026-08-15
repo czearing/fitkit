@@ -19,6 +19,32 @@ forbid_symbols(
 its measured composition. Containment established by reading the call graph once is worth nothing
 the day someone adds a call. This is worth something every day.
 
+## `forbid_derivations_from`
+
+Fails if any function signature derives one kind of output from a kind of input. Where
+`forbid_symbols` bans a spelling, this bans a shape.
+
+```rust
+forbid_derivations_from(
+    &sources,                          // (path, text) pairs
+    "Requirement",                     // what must not be derived
+    &["&str", "String", "name:"],      // from what it must not be derived
+    &["(String, Measured)"],           // parameters that are passengers
+);
+```
+
+**Catches:** the back door into an engine that already refuses names elsewhere. Intent stated by
+the caller is legitimate; intent inferred from a label is not, and the two are indistinguishable
+behaviourally because the laws themselves are unchanged. Only the signature betrays it, so only a
+signature check finds it.
+
+A substring ban cannot express this. Banning `&str` outright fires on every incidental parameter in
+the repository, and banning nothing misses the pattern entirely. The parser strips line comments so
+a file that discusses the banned shape is not condemned by its own prose, and flattens signatures
+so a formatter cannot hide one across lines. `exempt` covers the case where a banned type is
+present but demonstrably a passenger, such as a label carried alongside the measurement that
+actually decides.
+
 ## `assert_identity_without_evidence`
 
 Fails if a model produces controls from an empty reference.
