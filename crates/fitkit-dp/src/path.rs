@@ -246,7 +246,7 @@ where
     E: Fn(usize, usize) -> f64,
     T: Fn(usize, usize) -> f64,
 {
-    margins_of(steps, states, transition_weight, emission, transition, None)
+    margins_of(steps, states, transition_weight, emission, transition, None, None)
 }
 
 /// How much worse the best alternative is, when a state goes on to only a few others.
@@ -259,21 +259,29 @@ where
 ///
 /// `onward` names the states each state may go on to, by index.
 ///
+/// `apart` says which states are different answers rather than different states. A model that
+/// carries context holds more than it reports, and two states that report the same thing under
+/// different contexts are not alternatives to each other: treating them as such measures how sure
+/// the model is of the context, which it was not asked, instead of how sure it is of the answer,
+/// which it was. States sharing a key are one answer.
+///
 /// # Panics
 ///
 /// If `onward` names a state outside the grid.
-pub fn decode_margins_onward<E, T, O>(
+pub fn decode_margins_onward<E, T, O, A>(
     steps: usize,
     states: usize,
     transition_weight: f64,
     emission: E,
     transition: T,
     onward: O,
+    apart: A,
 ) -> Vec<f64>
 where
     E: Fn(usize, usize) -> f64,
     T: Fn(usize, usize) -> f64,
     O: Fn(usize) -> Vec<u32>,
+    A: Fn(usize) -> u64,
 {
     let out_of: Vec<Vec<u32>> = (0..states).map(&onward).collect();
     for list in &out_of {
@@ -281,48 +289,8 @@ where
             assert!((to as usize) < states, "a state outside the grid was named as reachable");
         }
     }
-    margins_of(steps, states, transition_weight, emission, transition, Some(&out_of))
-}
-
-/// How much worse the best alternative is, when a step may only be reached some ways.
-///
-/// The margin counterpart of [`decode_path_into`], and the same bargain: a model that carries
-/// context in its states has a transition that is impossible almost everywhere, and walking the
-/// pairs it rules out costs `states` times more than walking the ones it allows. Without this a
-/// margin is unaffordable at the state counts such a model reaches, which is exactly where knowing
-/// how safe a choice was matters most.
-///
-/// `into` names the states each state may be reached from, by index, as in [`decode_path_into`].
-///
-/// # Panics
-///
-/// If `into` names a state outside the grid.
-pub fn decode_margins_into<E, T, I>(
-    steps: usize,
-    states: usize,
-    transition_weight: f64,
-    emission: E,
-    transition: T,
-    into: I,
-) -> Vec<f64>
-where
-    E: Fn(usize, usize) -> f64,
-    T: Fn(usize, usize) -> f64,
-    I: Fn(usize) -> Vec<u32>,
-{
-    let reached: Vec<Vec<u32>> = (0..states).map(&into).collect();
-    for list in &reached {
-        for &from in list {
-            assert!((from as usize) < states, "a state outside the grid was named as reachable");
-        }
-    }
-    let mut out_of = vec![Vec::new(); states];
-    for (to, list) in reached.iter().enumerate() {
-        for &from in list {
-            out_of[from as usize].push(u32::try_from(to).unwrap_or(u32::MAX));
-        }
-    }
-    margins_of(steps, states, transition_weight, emission, transition, Some(&out_of))
+    let apart: Vec<u64> = (0..states).map(&apart).collect();
+    margins_of(steps, states, transition_weight, emission, transition, Some(&out_of), Some(&apart))
 }
 
 /// Both margin passes, with and without a predecessor map.
@@ -333,6 +301,7 @@ fn margins_of<E, T>(
     emission: E,
     transition: T,
     out_of: Option<&[Vec<u32>]>,
+    apart: Option<&[u64]>,
 ) -> Vec<f64>
 where
     E: Fn(usize, usize) -> f64,
@@ -371,7 +340,14 @@ where
         .collect();
 
     let walk = |standing: &[Vec<u32>], prove: bool| -> Option<Vec<f64>> {
-        walk_within(steps, states, (&emit_breaks, &emit_cost), (&weighted, out_of), standing, prove)
+        walk_within(
+            steps,
+            states,
+            (&emit_breaks, &emit_cost),
+            (&weighted, out_of),
+            (standing, apart),
+            prove,
+        )
     };
 
     if !live.iter().any(Vec::is_empty) {
@@ -411,7 +387,7 @@ struct Within<'a> {
     out_of: Option<&'a [Vec<u32>]>,
     /// The states left standing at each step.
     standing: &'a [Vec<u32>],
-    /// The same, indexed by step and state.
+    /// The standing states, indexed by step and state.
     inside: Vec<bool>,
 }
 
@@ -511,8 +487,9 @@ impl<'a> Within<'a> {
         states: usize,
         emitted: Emitted<'a>,
         reach: Reach<'a>,
-        standing: &'a [Vec<u32>],
+        told: (&'a [Vec<u32>], Option<&'a [u64]>),
     ) -> Self {
+        let (standing, _) = told;
         let mut inside = vec![false; steps * states];
         for (step, states_here) in standing.iter().enumerate() {
             for &state in states_here {
@@ -534,11 +511,12 @@ fn walk_within(
     states: usize,
     emitted: Emitted,
     reach: Reach,
-    standing: &[Vec<u32>],
+    told: (&[Vec<u32>], Option<&[u64]>),
     prove: bool,
 ) -> Option<Vec<f64>> {
+    let (standing, apart) = told;
     let (emit_breaks, emit_cost) = emitted;
-    let within = Within::new(steps, states, emitted, reach, standing);
+    let within = Within::new(steps, states, emitted, reach, told);
 
     let forward = within.ahead();
 
@@ -559,7 +537,9 @@ fn walk_within(
     Some(
         (0..steps)
             .map(|step| {
-                let (mut best, mut runner_up) = (out, out);
+                let answer =
+                    |state: u32| apart.map_or(u64::from(state), |apart| apart[state as usize]);
+                let (mut best, mut runner_up) = ((out, 0), out);
                 for &state in &standing[step] {
                     let at = step * states + state as usize;
                     if forward[at].0 == u32::MAX || backward[at].0 == u32::MAX {
@@ -569,17 +549,21 @@ fn walk_within(
                         forward[at].0 + backward[at].0 - emit_breaks[at],
                         forward[at].1 + backward[at].1 - emit_cost[at],
                     );
-                    if total < best {
-                        runner_up = best;
-                        best = total;
-                    } else if total < runner_up {
+                    // The runner up has to be a different answer, not merely a different state,
+                    // or the margin reports how sure the model is of what it kept to itself.
+                    if total < best.0 {
+                        if answer(state) != best.1 && best.0 < runner_up {
+                            runner_up = best.0;
+                        }
+                        best = (total, answer(state));
+                    } else if answer(state) != best.1 && total < runner_up {
                         runner_up = total;
                     }
                 }
-                if runner_up.0 != best.0 || !runner_up.1.is_finite() {
+                if runner_up.0 != best.0 .0 || !runner_up.1.is_finite() {
                     f64::INFINITY
                 } else {
-                    runner_up.1 - best.1
+                    runner_up.1 - best.0 .1
                 }
             })
             .collect(),
@@ -812,7 +796,7 @@ mod tests {
     use alloc::vec;
 
     use super::{
-        decode_margins, decode_margins_into, decode_path, decode_path_into, decode_path_with_cost,
+        decode_margins, decode_margins_onward, decode_path, decode_path_into, decode_path_with_cost,
     };
 
     #[test]
@@ -1108,36 +1092,41 @@ mod tests {
     }
 
     #[test]
-    fn naming_every_predecessor_margins_the_same_as_naming_none() {
+    fn naming_every_successor_margins_the_same_as_naming_none() {
         let emission = |step: usize, state: usize| ((step * 7 + state * 3) % 5) as f64;
         let transition = |from: usize, to: usize| if from == to { 0.0 } else { 1.0 };
         let whole = decode_margins(6, 4, 1.0, emission, transition);
-        let named = decode_margins_into(6, 4, 1.0, emission, transition, |_| vec![0, 1, 2, 3]);
+        let named = decode_margins_onward(
+            6,
+            4,
+            1.0,
+            emission,
+            transition,
+            |_| vec![0, 1, 2, 3],
+            |at| at as u64,
+        );
         assert_eq!(whole, named);
     }
 
     #[test]
-    fn a_predecessor_map_margins_what_walking_the_pairs_it_forbids_would() {
+    fn a_successor_map_margins_what_walking_the_pairs_it_forbids_would() {
         // The map and the transition say the same thing, one by omission and one at infinite cost,
         // so the margin may not depend on which way it was said.
-        let allowed = |to: usize| {
-            let to = u32::try_from(to).unwrap_or(0);
-            if to == 0 {
-                vec![0, 2]
-            } else {
-                vec![to - 1, to]
-            }
+        // 0 goes on to 0 and 1, 1 to 1 and 2, 2 to 2 and 0.
+        let onward = |from: usize| {
+            let from = u32::try_from(from).unwrap_or(0);
+            vec![from, (from + 1) % 3]
         };
         let emission = |step: usize, state: usize| ((step * 3 + state) % 4) as f64;
         let priced = |from: usize, to: usize| {
-            if allowed(to).contains(&u32::try_from(from).unwrap_or(0)) {
+            if onward(from).contains(&u32::try_from(to).unwrap_or(0)) {
                 f64::from(u8::from(from != to))
             } else {
                 f64::INFINITY
             }
         };
         let whole = decode_margins(5, 3, 1.0, emission, priced);
-        let named = decode_margins_into(5, 3, 1.0, emission, priced, allowed);
+        let named = decode_margins_onward(5, 3, 1.0, emission, priced, onward, |at| at as u64);
         assert_eq!(whole, named);
     }
 
@@ -1154,8 +1143,34 @@ mod tests {
         };
         let transition = |from: usize, to: usize| f64::from(u8::from(from != to));
         let margins = decode_margins(4, 3, 1.0, emission, transition);
-        let named = decode_margins_into(4, 3, 1.0, emission, transition, |_| vec![0, 1, 2]);
+        let named = decode_margins_onward(
+            4,
+            3,
+            1.0,
+            emission,
+            transition,
+            |_| vec![0, 1, 2],
+            |at| at as u64,
+        );
         assert_eq!(margins.len(), 4);
         assert_eq!(margins, named);
+    }
+
+    #[test]
+    fn states_that_report_the_same_thing_are_not_alternatives_to_each_other() {
+        // Two pairs of states, tied within each pair and a clear step apart between them. Read as
+        // four states the runner up is the tie, and the margin is nothing however plain the real
+        // choice was. Read as two answers the tie is the same answer, and the margin is what
+        // reporting the other one would have cost.
+        let emission = |_step: usize, state: usize| if state < 2 { 0.0 } else { 4.0 };
+        let transition = |_from: usize, _to: usize| 0.0;
+        let apart = |state: usize| (state / 2) as u64;
+        let onward = |_from: usize| vec![0, 1, 2, 3];
+
+        let split = decode_margins_onward(3, 4, 1.0, emission, transition, onward, |at| at as u64);
+        assert_eq!(split, vec![0.0; 3]);
+
+        let joined = decode_margins_onward(3, 4, 1.0, emission, transition, onward, apart);
+        assert_eq!(joined, vec![4.0; 3]);
     }
 }

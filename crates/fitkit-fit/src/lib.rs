@@ -8,8 +8,7 @@ use alloc::vec::Vec;
 
 use fitkit_core::{Control, Evidence, Margin, Plan, Span};
 use fitkit_dp::{
-    decode_margins, decode_margins_into, decode_margins_onward, decode_path, decode_path_into,
-    decode_path_onward,
+    decode_margins, decode_margins_onward, decode_path, decode_path_into, decode_path_onward,
 };
 
 /// A signal that can be cut into spans and put back together.
@@ -162,6 +161,20 @@ pub trait Fit: Model {
     fn onward(&self, _from: &Self::Params) -> Option<Vec<u32>> {
         None
     }
+
+    /// What a candidate reports, for candidates that hold more than they report.
+    ///
+    /// A margin is the distance to the best alternative, and an alternative is another answer, not
+    /// another way of arriving at the same one. A model carrying context has candidates that agree
+    /// about what to report and differ only in what they remember, and counting those as
+    /// alternatives measures how sure the model is of something it was never asked, which reads as
+    /// no confidence at all wherever the context is open.
+    ///
+    /// Candidates sharing a key are one answer. The default gives each its own, which is right for
+    /// a model whose candidates are exactly what it reports.
+    fn apart(&self, at: usize, _params: &Self::Params) -> u64 {
+        at as u64
+    }
 }
 
 /// Recover a plan from a reference.
@@ -251,15 +264,7 @@ pub fn margins<F: Fit>(model: &F, reference: &F::Signal) -> Vec<Margin> {
             emission,
             transition,
             |from| model.onward(&candidates[from]).unwrap_or_default(),
-        )
-    } else if model.into(&candidates[0]).is_some() {
-        decode_margins_into(
-            evidence.len(),
-            candidates.len(),
-            model.transition_weight(),
-            emission,
-            transition,
-            |to| model.into(&candidates[to]).unwrap_or_default(),
+            |state| model.apart(state, &candidates[state]),
         )
     } else {
         decode_margins(
