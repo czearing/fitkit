@@ -11,5 +11,8 @@ extern crate alloc;
 mod path;
 mod subset;
 
-pub use path::{decode_margins, decode_path, decode_path_into, decode_path_with_cost, Decoded};
+pub use path::{
+    decode_margins, decode_margins_into, decode_margins_onward, decode_path, decode_path_into,
+    decode_path_onward, decode_path_with_cost, Decoded,
+};
 pub use subset::{optimise_subset, Solver, SubsetResult, MAX_POOL};

@@ -7,7 +7,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use fitkit_core::{Control, Evidence, Margin, Plan, Span};
-use fitkit_dp::{decode_margins, decode_path, decode_path_into};
+use fitkit_dp::{
+    decode_margins, decode_margins_into, decode_margins_onward, decode_path, decode_path_into,
+    decode_path_onward,
+};
 
 /// A signal that can be cut into spans and put back together.
 ///
@@ -142,6 +145,23 @@ pub trait Fit: Model {
     fn into(&self, _to: &Self::Params) -> Option<Vec<u32>> {
         None
     }
+
+    /// Which candidates a step may go on to, by index into [`Model::candidates`].
+    ///
+    /// The same question as [`into`](Fit::into) asked forwards, and the one a model that carries
+    /// context can answer without searching: the context after a step follows from the context
+    /// before it and the label chosen, so there are as many ways onward as there are labels, while
+    /// the ways in are as many as the contexts that arrive at the same place. Answering here is
+    /// preferred over answering [`into`](Fit::into), which has to be turned around before it can
+    /// be walked.
+    ///
+    /// Returning nothing means any of them, which is the ordinary dense search and the default.
+    ///
+    /// A model that answers must answer for every candidate. Naming a candidate outside the grid
+    /// is a fault in the model and panics the search.
+    fn onward(&self, _from: &Self::Params) -> Option<Vec<u32>> {
+        None
+    }
 }
 
 /// Recover a plan from a reference.
@@ -160,7 +180,17 @@ pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Plan<F::Params> {
     let emission =
         |step: usize, state: usize| model.emission(&evidence[step].value, &candidates[state]);
     let transition = |from: usize, to: usize| model.transition(&candidates[from], &candidates[to]);
-    let path = if model.into(&candidates[0]).is_some() {
+    let path = if model.onward(&candidates[0]).is_some() {
+        decode_path_onward(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+            |from| model.onward(&candidates[from]).unwrap_or_default(),
+        )
+        .path
+    } else if model.into(&candidates[0]).is_some() {
         decode_path_into(
             evidence.len(),
             candidates.len(),
@@ -199,6 +229,9 @@ pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Plan<F::Params> {
 /// was. A span with no margin had a tied runner up. An untrusted span reports [`Margin::NONE`],
 /// since it decided nothing.
 ///
+/// A model that answers [`Fit::into`] pays for the transitions it allows rather than every pair,
+/// as [`recover`] already did.
+///
 /// Costs a second decode, so it is a separate call rather than part of [`Plan`].
 pub fn margins<F: Fit>(model: &F, reference: &F::Signal) -> Vec<Margin> {
     let evidence = model.evidence(reference);
@@ -207,17 +240,41 @@ pub fn margins<F: Fit>(model: &F, reference: &F::Signal) -> Vec<Margin> {
         return Vec::new();
     }
 
-    decode_margins(
-        evidence.len(),
-        candidates.len(),
-        model.transition_weight(),
-        |step, state| model.emission(&evidence[step].value, &candidates[state]),
-        |from, to| model.transition(&candidates[from], &candidates[to]),
-    )
-    .into_iter()
-    .zip(&evidence)
-    .map(|(gap, span)| if span.is_informative() { Margin::new(gap) } else { Margin::NONE })
-    .collect()
+    let emission =
+        |step: usize, state: usize| model.emission(&evidence[step].value, &candidates[state]);
+    let transition = |from: usize, to: usize| model.transition(&candidates[from], &candidates[to]);
+    let gaps = if model.onward(&candidates[0]).is_some() {
+        decode_margins_onward(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+            |from| model.onward(&candidates[from]).unwrap_or_default(),
+        )
+    } else if model.into(&candidates[0]).is_some() {
+        decode_margins_into(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+            |to| model.into(&candidates[to]).unwrap_or_default(),
+        )
+    } else {
+        decode_margins(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+        )
+    };
+
+    gaps.into_iter()
+        .zip(&evidence)
+        .map(|(gap, span)| if span.is_informative() { Margin::new(gap) } else { Margin::NONE })
+        .collect()
 }
 
 #[cfg(test)]

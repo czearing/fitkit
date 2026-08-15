@@ -132,6 +132,101 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
     Decoded { path, cost: total }
 }
 
+/// The lowest-cost path, when a state goes on to only a few others.
+///
+/// The same bargain as [`decode_path_into`], asked in the direction a model that carries context
+/// can answer without building anything: naming the ways onward from a state costs one entry per
+/// label, while naming the ways into it costs one per context that arrives there, which is the
+/// whole grid again for a model of any size.
+///
+/// `onward` names the states each state may go on to, by index into the grid.
+///
+/// # Panics
+///
+/// If `onward` names a state outside the grid, or if `states` exceeds the backpointer width.
+pub fn decode_path_onward<E, T, O>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    onward: O,
+) -> Decoded
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    O: Fn(usize) -> Vec<u32>,
+{
+    if steps == 0 || states == 0 {
+        return Decoded { path: Vec::new(), cost: 0.0 };
+    }
+    assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
+
+    let out_of: Vec<Vec<u32>> = (0..states).map(&onward).collect();
+    for list in &out_of {
+        for &to in list {
+            assert!((to as usize) < states, "a state outside the grid was named as reachable");
+        }
+    }
+    let weighted = |from: usize, to: usize| {
+        if transition_weight.is_finite() && transition_weight != 0.0 && states > 1 {
+            payable(transition_weight * transition(from, to))
+        } else {
+            0.0
+        }
+    };
+
+    let mut cost: Vec<f64> = (0..states).map(|state| payable(emission(0, state))).collect();
+    let mut next = vec![f64::INFINITY; states];
+    let mut here = vec![f64::INFINITY; states];
+    let mut back = vec![0_u32; steps * states];
+
+    for step in 1..steps {
+        // What a step costs is asked before how it might be reached, so a model that rules most
+        // states out at most steps pays only for the ones still in play.
+        for (state, cell) in here.iter_mut().enumerate() {
+            *cell = payable(emission(step, state));
+        }
+        next.fill(f64::INFINITY);
+        for (from, &previous) in cost.iter().enumerate() {
+            if !previous.is_finite() {
+                continue;
+            }
+            for &to in &out_of[from] {
+                let to = to as usize;
+                if !here[to].is_finite() {
+                    continue;
+                }
+                let total = previous + weighted(from, to);
+                if total < next[to] {
+                    next[to] = total;
+                    back[step * states + to] = u32::try_from(from).unwrap_or(0);
+                }
+            }
+        }
+        for (state, cell) in next.iter_mut().enumerate() {
+            *cell += here[state];
+        }
+        cost.copy_from_slice(&next);
+    }
+
+    let (mut end, mut total) = (0, f64::INFINITY);
+    for (state, &paid) in cost.iter().enumerate() {
+        if paid < total {
+            (total, end) = (paid, state);
+        }
+    }
+
+    let mut path = vec![0; steps];
+    path[steps - 1] = end;
+    for step in (1..steps).rev() {
+        end = back[step * states + end] as usize;
+        path[step - 1] = end;
+    }
+
+    Decoded { path, cost: total }
+}
+
 /// How much worse the best alternative is, at each step.
 ///
 /// The answer to "how far can this measurement be wrong before the decode changes". A step with a
@@ -151,10 +246,361 @@ where
     E: Fn(usize, usize) -> f64,
     T: Fn(usize, usize) -> f64,
 {
+    margins_of(steps, states, transition_weight, emission, transition, None)
+}
+
+/// How much worse the best alternative is, when a state goes on to only a few others.
+///
+/// The margin counterpart of [`decode_path_onward`], and the direction a model that carries
+/// context can answer cheaply: the context after a step follows from the one before it and the
+/// label chosen, so a state has as many ways onward as there are labels, while the ways into it
+/// are as many as the contexts that arrive at the same place. Asking onward is what keeps the
+/// margin affordable at the state counts such a model reaches.
+///
+/// `onward` names the states each state may go on to, by index.
+///
+/// # Panics
+///
+/// If `onward` names a state outside the grid.
+pub fn decode_margins_onward<E, T, O>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    onward: O,
+) -> Vec<f64>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    O: Fn(usize) -> Vec<u32>,
+{
+    let out_of: Vec<Vec<u32>> = (0..states).map(&onward).collect();
+    for list in &out_of {
+        for &to in list {
+            assert!((to as usize) < states, "a state outside the grid was named as reachable");
+        }
+    }
+    margins_of(steps, states, transition_weight, emission, transition, Some(&out_of))
+}
+
+/// How much worse the best alternative is, when a step may only be reached some ways.
+///
+/// The margin counterpart of [`decode_path_into`], and the same bargain: a model that carries
+/// context in its states has a transition that is impossible almost everywhere, and walking the
+/// pairs it rules out costs `states` times more than walking the ones it allows. Without this a
+/// margin is unaffordable at the state counts such a model reaches, which is exactly where knowing
+/// how safe a choice was matters most.
+///
+/// `into` names the states each state may be reached from, by index, as in [`decode_path_into`].
+///
+/// # Panics
+///
+/// If `into` names a state outside the grid.
+pub fn decode_margins_into<E, T, I>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    into: I,
+) -> Vec<f64>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    I: Fn(usize) -> Vec<u32>,
+{
+    let reached: Vec<Vec<u32>> = (0..states).map(&into).collect();
+    for list in &reached {
+        for &from in list {
+            assert!((from as usize) < states, "a state outside the grid was named as reachable");
+        }
+    }
+    let mut out_of = vec![Vec::new(); states];
+    for (to, list) in reached.iter().enumerate() {
+        for &from in list {
+            out_of[from as usize].push(u32::try_from(to).unwrap_or(u32::MAX));
+        }
+    }
+    margins_of(steps, states, transition_weight, emission, transition, Some(&out_of))
+}
+
+/// Both margin passes, with and without a predecessor map.
+fn margins_of<E, T>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    out_of: Option<&[Vec<u32>]>,
+) -> Vec<f64>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+{
     if steps == 0 || states == 0 {
         return Vec::new();
     }
 
+    let mut emit_breaks = vec![0_u32; steps * states];
+    let mut emit_cost = vec![0.0; steps * states];
+    for at in 0..steps * states {
+        let emitted = payable(emission(at / states, at % states));
+        (emit_breaks[at], emit_cost[at]) = pay::<true>(0, 0.0, emitted);
+    }
+
+    let weighted = |from: usize, to: usize| {
+        if transition_weight.is_finite() && transition_weight != 0.0 && states > 1 {
+            payable(transition_weight * transition(from, to))
+        } else {
+            0.0
+        }
+    };
+
+    // Only the states the evidence leaves standing at each step. A model whose emission rules most
+    // states out at most steps pays for what is still in play rather than for the whole grid.
+    // Anything ruled out costs a break, and a break beats any cost, so a state that is out can
+    // never be the best or the runner up as long as some path is in throughout.
+    let live: Vec<Vec<u32>> = (0..steps)
+        .map(|step| {
+            (0..states)
+                .filter(|state| emit_breaks[step * states + state] == 0)
+                .filter_map(|state| u32::try_from(state).ok())
+                .collect()
+        })
+        .collect();
+
+    let walk = |standing: &[Vec<u32>], prove: bool| -> Option<Vec<f64>> {
+        walk_within(steps, states, (&emit_breaks, &emit_cost), (&weighted, out_of), standing, prove)
+    };
+
+    if !live.iter().any(Vec::is_empty) {
+        if let Some(found) = walk(&live, true) {
+            return found;
+        }
+    }
+
+    // The pruning could have changed the answer, so the grid is walked whole. With a predecessor
+    // map that is still only the pairs the model allows; without one it is every pair there is.
+    let whole: Vec<u32> = (0..states).filter_map(|state| u32::try_from(state).ok()).collect();
+    if out_of.is_some() {
+        let standing = vec![whole; steps];
+        if let Some(found) = walk(&standing, false) {
+            return found;
+        }
+    }
+    dense_margins(steps, states, transition_weight, emission, transition)
+}
+
+/// What a step between two states costs, and which steps are possible at all.
+///
+/// Nothing for the second means any state may follow any other, which is the dense search.
+type Reach<'a> = (&'a dyn Fn(usize, usize) -> f64, Option<&'a [Vec<u32>]>);
+
+/// What each state costs at each step, as a break count and a price.
+type Emitted<'a> = (&'a [u32], &'a [f64]);
+
+/// The grid one walk is allowed to touch.
+struct Within<'a> {
+    steps: usize,
+    states: usize,
+    emit_breaks: &'a [u32],
+    emit_cost: &'a [f64],
+    weighted: &'a dyn Fn(usize, usize) -> f64,
+    /// The states each state may go on to, or nothing when any of them may follow.
+    out_of: Option<&'a [Vec<u32>]>,
+    /// The states left standing at each step.
+    standing: &'a [Vec<u32>],
+    /// The same, indexed by step and state.
+    inside: Vec<bool>,
+}
+
+impl Within<'_> {
+    fn at(&self, step: usize, state: usize) -> usize {
+        step * self.states + state
+    }
+
+    fn emitted(&self, at: usize) -> (u32, f64) {
+        (self.emit_breaks[at], self.emit_cost[at])
+    }
+
+    /// The cost of reaching each state from the first step.
+    ///
+    /// Pushed from the states still standing rather than pulled into them. A state names far more
+    /// ways it could have been reached than ways it goes on, since the context after a step is
+    /// decided by the one before it and the label chosen while many contexts arrive at the same
+    /// place. Reading the map in the direction it is sparse in is the whole saving.
+    fn ahead(&self) -> Vec<(u32, f64)> {
+        let out = (u32::MAX, f64::INFINITY);
+        let mut forward = vec![out; self.steps * self.states];
+        for &state in &self.standing[0] {
+            forward[state as usize] = self.emitted(state as usize);
+        }
+
+        for step in 1..self.steps {
+            for &from in &self.standing[step - 1] {
+                let from = from as usize;
+                let (breaks, cost) = forward[self.at(step - 1, from)];
+                if breaks == u32::MAX {
+                    continue;
+                }
+                let mut consider = |to: usize| {
+                    let at = self.at(step, to);
+                    if !self.inside[at] {
+                        return;
+                    }
+                    let paid = pay::<true>(breaks, cost, (self.weighted)(from, to));
+                    let reach = (paid.0 + self.emit_breaks[at], paid.1 + self.emit_cost[at]);
+                    if forward[at].0 == u32::MAX || reach < forward[at] {
+                        forward[at] = reach;
+                    }
+                };
+                match self.out_of {
+                    Some(out_of) => out_of[from].iter().for_each(|&to| consider(to as usize)),
+                    None => self.standing[step].iter().for_each(|&to| consider(to as usize)),
+                }
+            }
+        }
+        forward
+    }
+
+    /// The cost of reaching the last step from each state.
+    fn behind(&self) -> Vec<(u32, f64)> {
+        let out = (u32::MAX, f64::INFINITY);
+        let mut backward = vec![out; self.steps * self.states];
+        for &state in &self.standing[self.steps - 1] {
+            let at = self.at(self.steps - 1, state as usize);
+            backward[at] = self.emitted(at);
+        }
+
+        for step in (0..self.steps - 1).rev() {
+            for &from in &self.standing[step] {
+                let from = from as usize;
+                let mut best = out;
+                let mut consider = |to: usize| {
+                    let ahead = self.at(step + 1, to);
+                    if !self.inside[ahead] {
+                        return;
+                    }
+                    let (breaks, cost) = backward[ahead];
+                    if breaks == u32::MAX {
+                        return;
+                    }
+                    let paid = pay::<true>(breaks, cost, (self.weighted)(from, to));
+                    if paid < best {
+                        best = paid;
+                    }
+                };
+                match self.out_of {
+                    Some(out_of) => out_of[from].iter().for_each(|&to| consider(to as usize)),
+                    None => self.standing[step + 1].iter().for_each(|&to| consider(to as usize)),
+                }
+                let at = self.at(step, from);
+                if best.0 != u32::MAX {
+                    backward[at] = (best.0 + self.emit_breaks[at], best.1 + self.emit_cost[at]);
+                }
+            }
+        }
+        backward
+    }
+}
+
+impl<'a> Within<'a> {
+    fn new(
+        steps: usize,
+        states: usize,
+        emitted: Emitted<'a>,
+        reach: Reach<'a>,
+        standing: &'a [Vec<u32>],
+    ) -> Self {
+        let mut inside = vec![false; steps * states];
+        for (step, states_here) in standing.iter().enumerate() {
+            for &state in states_here {
+                inside[step * states + state as usize] = true;
+            }
+        }
+        let (emit_breaks, emit_cost) = emitted;
+        let (weighted, out_of) = reach;
+        Self { steps, states, emit_breaks, emit_cost, weighted, out_of, standing, inside }
+    }
+}
+
+/// One pruned walk of the grid, forwards then backwards, over the states named at each step.
+///
+/// Returns nothing when `prove` is asked for and no path avoided every state that was left out,
+/// since then the pruning could have changed the answer.
+fn walk_within(
+    steps: usize,
+    states: usize,
+    emitted: Emitted,
+    reach: Reach,
+    standing: &[Vec<u32>],
+    prove: bool,
+) -> Option<Vec<f64>> {
+    let (emit_breaks, emit_cost) = emitted;
+    let within = Within::new(steps, states, emitted, reach, standing);
+
+    let forward = within.ahead();
+
+    // A zero break path proves nothing was forced through a state that was left out, so
+    // restricting the search cannot have changed the answer. Without one the answer turns on where
+    // the unavoidable break falls, and nothing may be skipped.
+    if prove
+        && standing[steps - 1]
+            .iter()
+            .all(|&state| forward[(steps - 1) * states + state as usize].0 != 0)
+    {
+        return None;
+    }
+
+    let backward = within.behind();
+    let out = (u32::MAX, f64::INFINITY);
+
+    Some(
+        (0..steps)
+            .map(|step| {
+                let (mut best, mut runner_up) = (out, out);
+                for &state in &standing[step] {
+                    let at = step * states + state as usize;
+                    if forward[at].0 == u32::MAX || backward[at].0 == u32::MAX {
+                        continue;
+                    }
+                    let total = (
+                        forward[at].0 + backward[at].0 - emit_breaks[at],
+                        forward[at].1 + backward[at].1 - emit_cost[at],
+                    );
+                    if total < best {
+                        runner_up = best;
+                        best = total;
+                    } else if total < runner_up {
+                        runner_up = total;
+                    }
+                }
+                if runner_up.0 != best.0 || !runner_up.1.is_finite() {
+                    f64::INFINITY
+                } else {
+                    runner_up.1 - best.1
+                }
+            })
+            .collect(),
+    )
+}
+
+/// The whole grid, walked without pruning.
+///
+/// Kept for the case where no path avoids a state the evidence rules out. Then a break is
+/// unavoidable and which state carries it decides the answer, so nothing may be skipped.
+fn dense_margins<E, T>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+) -> Vec<f64>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+{
     let jump = jump_table(states, transition_weight, transition);
     let mut emit_breaks = vec![0_u32; steps * states];
     let mut emit_cost = vec![0.0; steps * states];
@@ -365,7 +811,9 @@ fn jump_table<T: Fn(usize, usize) -> f64>(states: usize, weight: f64, transition
 mod tests {
     use alloc::vec;
 
-    use super::{decode_margins, decode_path, decode_path_into, decode_path_with_cost};
+    use super::{
+        decode_margins, decode_margins_into, decode_path, decode_path_into, decode_path_with_cost,
+    };
 
     #[test]
     fn naming_every_state_decodes_exactly_as_the_dense_search_does() {
@@ -404,7 +852,7 @@ mod tests {
             if to == 0 {
                 vec![]
             } else {
-                vec![to as u32 - 1]
+                vec![u32::try_from(to).unwrap_or(0) - 1]
             }
         });
         assert_eq!(decoded.path, vec![0, 1, 2, 3]);
@@ -657,5 +1105,57 @@ mod tests {
     fn a_single_candidate_leaves_the_margin_unbounded() {
         assert!(decode_margins(3, 1, 0.0, |_, _| 1.0, |_, _| 0.0)[0].is_infinite());
         assert!(decode_margins(0, 4, 0.0, |_, _| 1.0, |_, _| 0.0).is_empty());
+    }
+
+    #[test]
+    fn naming_every_predecessor_margins_the_same_as_naming_none() {
+        let emission = |step: usize, state: usize| ((step * 7 + state * 3) % 5) as f64;
+        let transition = |from: usize, to: usize| if from == to { 0.0 } else { 1.0 };
+        let whole = decode_margins(6, 4, 1.0, emission, transition);
+        let named = decode_margins_into(6, 4, 1.0, emission, transition, |_| vec![0, 1, 2, 3]);
+        assert_eq!(whole, named);
+    }
+
+    #[test]
+    fn a_predecessor_map_margins_what_walking_the_pairs_it_forbids_would() {
+        // The map and the transition say the same thing, one by omission and one at infinite cost,
+        // so the margin may not depend on which way it was said.
+        let allowed = |to: usize| {
+            let to = u32::try_from(to).unwrap_or(0);
+            if to == 0 {
+                vec![0, 2]
+            } else {
+                vec![to - 1, to]
+            }
+        };
+        let emission = |step: usize, state: usize| ((step * 3 + state) % 4) as f64;
+        let priced = |from: usize, to: usize| {
+            if allowed(to).contains(&u32::try_from(from).unwrap_or(0)) {
+                f64::from(u8::from(from != to))
+            } else {
+                f64::INFINITY
+            }
+        };
+        let whole = decode_margins(5, 3, 1.0, emission, priced);
+        let named = decode_margins_into(5, 3, 1.0, emission, priced, allowed);
+        assert_eq!(whole, named);
+    }
+
+    #[test]
+    fn a_margin_survives_a_step_the_evidence_rules_out_entirely() {
+        // Nothing is left standing at step two, so the pruned walk cannot answer and the whole
+        // grid has to be walked. The margin is still the one the grid gives.
+        let emission = |step: usize, state: usize| {
+            if step == 2 {
+                f64::INFINITY
+            } else {
+                f64::from(u8::try_from(state).unwrap_or(0))
+            }
+        };
+        let transition = |from: usize, to: usize| f64::from(u8::from(from != to));
+        let margins = decode_margins(4, 3, 1.0, emission, transition);
+        let named = decode_margins_into(4, 3, 1.0, emission, transition, |_| vec![0, 1, 2]);
+        assert_eq!(margins.len(), 4);
+        assert_eq!(margins, named);
     }
 }
