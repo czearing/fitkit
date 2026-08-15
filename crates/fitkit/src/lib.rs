@@ -5,7 +5,7 @@
 //!
 //! | Layer | What it gives you |
 //! | --- | --- |
-//! | [`core`] | [`Confidence`], [`Margin`], [`Evidence`], [`Reported`], [`Refusal`], [`Plan`] |
+//! | [`core`] | [`Confidence`], [`Cost`], [`Scale`], [`Margin`], [`Evidence`], [`Reported`], [`Refusal`], [`Plan`] |
 //! | [`dp`] | [`decode_path`] for sequences, [`optimise_subset`] for sets |
 //! | [`fit`] | [`Model`] and [`Fit`], recovered by [`recover`] and applied by [`Model::apply_plan`] |
 //! | [`feasible`] | [`Problem`] and [`Requirement`], solved for a region and its [`Margin`] |
@@ -56,7 +56,8 @@ pub use fitkit_ledger as ledger;
 
 #[doc(inline)]
 pub use fitkit_core::{
-    Answer, Confidence, Control, Evidence, Margin, Plan, Refusal, RefusalKind, Reported, Span,
+    Answer, Confidence, Control, Cost, Evidence, Margin, Plan, Refusal, RefusalKind, Reported,
+    Scale, Span,
 };
 #[doc(inline)]
 pub use fitkit_dp::{
@@ -74,8 +75,8 @@ pub use fitkit_ledger::{ask, within, Citation, Law, Record};
 pub mod prelude {
     pub use crate::{
         ask, decode_path, margins, optimise_subset, recover, within, Answer, Citation, Confidence,
-        Control, Evidence, Feasible, Fit, Law, Margin, Model, Plan, Problem, Record, Refusal,
-        Reported, Requirement, Row, Segmented, Sense, Span,
+        Control, Cost, Evidence, Feasible, Fit, Law, Margin, Model, Plan, Problem, Record, Refusal,
+        Reported, Requirement, Row, Scale, Segmented, Sense, Span,
     };
 }
 

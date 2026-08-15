@@ -5,7 +5,7 @@
 
 use std::fmt::Debug;
 
-use fitkit_core::Plan;
+use fitkit_core::{Cost, Plan, Scale};
 use fitkit_dp::optimise_subset;
 use fitkit_feasible::{Feasible, Problem};
 use fitkit_fit::{recover, Fit, Model, Segmented};
@@ -121,6 +121,27 @@ where
     );
 }
 
+/// Panic unless a scale still outranks a rule over the worst subject the engine really sees.
+///
+/// [`Scale::over`] keeps this promise for the numbers it was given. This checks the numbers were
+/// the true ones: pass the longest subject the engine accepts and the most any single step of it
+/// was measured to stray. A friction added later, or an input longer than the one the scale was
+/// sized for, fails here rather than quietly turning a run of unusual readings into a reported
+/// fault.
+///
+/// # Panics
+///
+/// If a subject made entirely of worst steps costs as much as one broken rule.
+pub fn assert_friction_never_reaches_a_rule(scale: Scale, steps: usize, worst_step: Cost) {
+    assert!(worst_step.is_clean(), "the worst step must be friction alone, not a broken rule");
+    let whole: f64 = (0..steps).map(|_| scale.price(worst_step)).sum();
+    assert!(
+        whole < scale.price(Cost::breach(0)),
+        "{steps} steps of {worst_step} come to {whole}, where one broken rule costs {}",
+        scale.breach()
+    );
+}
+
 /// Panic unless a reported margin is the error the answer really survives.
 ///
 /// Checks every corner of the box the margin claims, then one step past it. A margin that is
@@ -177,10 +198,22 @@ mod tests {
     use fitkit_feasible::{Problem, Row, Sense};
 
     use super::{
-        assert_beam_matches_exact, assert_deterministic, assert_identity_plan_changes_nothing,
-        assert_identity_without_evidence, assert_margin_holds, assert_untrusted_spans_stay_silent,
-        forbid_symbols,
+        assert_beam_matches_exact, assert_deterministic, assert_friction_never_reaches_a_rule,
+        assert_identity_plan_changes_nothing, assert_identity_without_evidence,
+        assert_margin_holds, assert_untrusted_spans_stay_silent, forbid_symbols,
     };
+    use super::{Cost, Scale};
+
+    #[test]
+    fn a_scale_sized_for_the_real_worst_step_holds() {
+        assert_friction_never_reaches_a_rule(Scale::over(200, 1.0), 200, Cost::friction(1.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "one broken rule costs")]
+    fn a_scale_sized_for_a_shorter_subject_than_it_sees_is_caught() {
+        assert_friction_never_reaches_a_rule(Scale::over(10, 1.0), 200, Cost::friction(1.0));
+    }
 
     struct Doubler;
 
