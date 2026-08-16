@@ -24,7 +24,7 @@ pub const RULES: u32 = 64;
 /// Friction cannot be negative and cannot be infinite. A search minimises, so a negative cost is a
 /// bribe rather than a rule, and it makes the objective incoherent.
 ///
-/// The float the search actually consumes comes from [`Scale::price`], which is where the promise
+/// The float the search consumes comes from [`Scale::price`], which is where the promise
 /// that friction never reaches a breach is kept.
 ///
 /// ```

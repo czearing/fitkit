@@ -85,7 +85,7 @@ usually catches.
 
 ## `assert_margin_holds`
 
-Fails if a reported margin is not the error the answer actually survives. Walks every corner of the
+Fails if a reported margin is not the error the answer survives. Walks every corner of the
 box the margin describes, requires all of them to satisfy every row, then requires a point just
 outside to fail.
 

@@ -205,7 +205,7 @@ where
     );
 }
 
-/// Panic unless a scale still outranks a rule over the worst subject the engine really sees.
+/// Panic unless a scale still outranks a rule over the worst subject the engine sees.
 ///
 /// [`Scale::over`] keeps this promise for the numbers it was given. This checks the numbers were
 /// the true ones: pass the longest subject the engine accepts and the most any single step of it
@@ -226,7 +226,7 @@ pub fn assert_friction_never_reaches_a_rule(scale: Scale, steps: usize, worst_st
     );
 }
 
-/// Panic unless a reported margin is the error the answer really survives.
+/// Panic unless a reported margin is the error the answer survives.
 ///
 /// Checks every corner of the box the margin claims, then one step past it. A margin that is
 /// decoration fails here.

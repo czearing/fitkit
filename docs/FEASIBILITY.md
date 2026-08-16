@@ -22,7 +22,7 @@ match problem.solve() {
 
 ## The answer is a region, not a number
 
-A single optimum hides the question a user actually has, which is how much room there is. A
+A single optimum hides the question a user has, which is how much room there is. A
 `Feasible::Region` reports a point and the [margin](#margin) around it. A `Feasible::Empty` reports
 which laws were left broken, so a refusal can be read rather than guessed at.
 
