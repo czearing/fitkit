@@ -162,12 +162,11 @@ where
     }
     assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
 
-    let out_of: Vec<Vec<u32>> = (0..states).map(&onward).collect();
-    for list in &out_of {
-        for &to in list {
-            assert!((to as usize) < states, "a state outside the grid was named as reachable");
-        }
-    }
+    // Asked for one state at a time and kept, rather than laid out in full before the decode
+    // starts. A model that names its own reachable states usually has far more states than any
+    // one signal can visit, and building every list costs more than the decode it serves. The
+    // ones actually reached are asked for once and reused at every later step.
+    let mut out_of: Vec<Option<Vec<u32>>> = vec![None; states];
     let weighted = |from: usize, to: usize| {
         if transition_weight.is_finite() && transition_weight != 0.0 && states > 1 {
             payable(transition_weight * transition(from, to))
@@ -177,37 +176,77 @@ where
     };
 
     let mut cost: Vec<f64> = (0..states).map(|state| payable(emission(0, state))).collect();
-    let mut next = vec![f64::INFINITY; states];
-    let mut here = vec![f64::INFINITY; states];
-    let mut back = vec![0_u32; steps * states];
+    // The states a path can still be in. Every other state costs infinity, and a step spent
+    // sweeping them re-reads the whole grid to learn what it already knew. Carrying the live ones
+    // makes a step cost what the sentence reaches rather than what the model could describe.
+    let mut live: Vec<usize> = (0..states).filter(|&state| cost[state].is_finite()).collect();
+    // Written before they are read, at the step that reaches them, so neither needs a starting
+    // value: `priced` records exactly which entries of this step are meaningful.
+    let mut next = vec![0.0_f64; states];
+    let mut here = vec![0.0_f64; states];
+    // Which step each state's cost was settled for, so a state is priced once per step and only
+    // if something still in play can reach it. Steps counted here start at one, so zero is a
+    // stamp no step can match and the array needs no other clearing.
+    let mut asked: Vec<usize> = vec![0; states];
+    let mut priced: Vec<usize> = Vec::new();
+    // Where each live state was reached from. Held for the states a step actually reaches rather
+    // than for the whole grid at every step, which would allocate a backpointer for each state
+    // the sentence was never in and spend more on clearing it than the decode costs.
+    let mut came: Vec<u32> = vec![0; states];
+    let mut trail: Vec<Vec<(u32, u32)>> = vec![Vec::new(); steps];
 
     for step in 1..steps {
-        // What a step costs is asked before how it might be reached, so a model that rules most
-        // states out at most steps pays only for the ones still in play.
-        for (state, cell) in here.iter_mut().enumerate() {
-            *cell = payable(emission(step, state));
-        }
-        next.fill(f64::INFINITY);
-        for (from, &previous) in cost.iter().enumerate() {
-            if !previous.is_finite() {
-                continue;
+        priced.clear();
+        for &from in &live {
+            let previous = cost[from];
+            if out_of[from].is_none() {
+                let named = onward(from);
+                for &to in &named {
+                    assert!(
+                        (to as usize) < states,
+                        "a state outside the grid was named as reachable"
+                    );
+                }
+                out_of[from] = Some(named);
             }
-            for &to in &out_of[from] {
+            let reachable = out_of[from].as_deref().unwrap_or_default();
+            for &to in reachable {
                 let to = to as usize;
+                // What a step costs is asked before how it might be reached, so a model that
+                // rules most states out at most steps pays only for the ones still in play.
+                if asked[to] != step {
+                    asked[to] = step;
+                    here[to] = payable(emission(step, to));
+                    next[to] = f64::INFINITY;
+                    priced.push(to);
+                }
                 if !here[to].is_finite() {
                     continue;
                 }
                 let total = previous + weighted(from, to);
                 if total < next[to] {
                     next[to] = total;
-                    back[step * states + to] = u32::try_from(from).unwrap_or(0);
+                    came[to] = u32::try_from(from).unwrap_or(0);
                 }
             }
         }
-        for (state, cell) in next.iter_mut().enumerate() {
-            *cell += here[state];
+        for &state in &live {
+            cost[state] = f64::INFINITY;
         }
-        cost.copy_from_slice(&next);
+        live.clear();
+        for &state in &priced {
+            let paid = next[state] + here[state];
+            cost[state] = paid;
+            if paid.is_finite() {
+                live.push(state);
+            }
+        }
+        // Relaxed in the order the whole grid would have been swept in, because a tie between two
+        // ways into a state is settled by which was offered first. Reaching them in the order the
+        // search happened to find them would decide ties differently.
+        live.sort_unstable();
+        trail[step] =
+            live.iter().map(|&state| (u32::try_from(state).unwrap_or(0), came[state])).collect();
     }
 
     let (mut end, mut total) = (0, f64::INFINITY);
@@ -220,7 +259,9 @@ where
     let mut path = vec![0; steps];
     path[steps - 1] = end;
     for step in (1..steps).rev() {
-        end = back[step * states + end] as usize;
+        end = trail[step]
+            .binary_search_by_key(&u32::try_from(end).unwrap_or(0), |&(state, _)| state)
+            .map_or(0, |found| trail[step][found].1 as usize);
         path[step - 1] = end;
     }
 
