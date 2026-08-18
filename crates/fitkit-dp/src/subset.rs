@@ -445,6 +445,46 @@ where
         .map(|chosen| chosen.map(|result| build(&result)))
 }
 
+/// Choose the best subset, and build one part per chosen item.
+///
+/// The counterpart of [`decode_path_parts`](crate::decode_path_parts), and the route a composer
+/// should take.
+///
+/// [`optimise_subset_as`] hands the caller's builder the whole [`SubsetResult`], and a builder
+/// that has the answer can disregard it: `|_| "a sentence nobody searched for"` typechecks, and
+/// what comes back is a witness with an authentic cost over content the search had no part in.
+/// That is the same hole [`Terms`] closed in the objective, one level further out.
+///
+/// Here `part` is asked about one item at a time and is never shown the subset, so it cannot know
+/// what was chosen and cannot answer as if it did. The framework does the assembly, which means
+/// the number of parts is the size of the subset the search settled on rather than something the
+/// builder decides. A caller cannot return one prepared passage where the evidence supported
+/// three, or three where it supported one.
+///
+/// What remains is that a part may be a constant. That is not the same defect: a constant part is
+/// content attached to an item, so it appears exactly when the search chooses that item and never
+/// otherwise, and the shape of the output still belongs to the search.
+///
+/// # Errors
+///
+/// As [`optimise_subset`].
+///
+/// # Panics
+///
+/// As [`optimise_subset`].
+pub fn optimise_subset_parts<P, F>(
+    terms: &Terms,
+    exact_limit: usize,
+    beam_width: usize,
+    part: F,
+) -> Answer<Chosen<Vec<P>>>
+where
+    F: Fn(usize) -> P,
+{
+    optimise_subset(terms, exact_limit, beam_width)
+        .map(|chosen| chosen.map(|result| result.indices().map(&part).collect()))
+}
+
 fn exact(terms: &Terms, tally: &mut Tally) -> Option<SubsetResult> {
     let pool = terms.pool;
     let mut best: Option<SubsetResult> = None;

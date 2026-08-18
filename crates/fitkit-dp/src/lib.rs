@@ -24,6 +24,10 @@ mod subset;
 pub use chosen::{Chosen, Trace};
 pub use path::{
     decode_margins, decode_margins_onward, decode_path, decode_path_as, decode_path_into,
-    decode_path_into_as, decode_path_onward, decode_path_onward_as, decode_path_with_cost, Decoded,
+    decode_path_into_as, decode_path_onward, decode_path_onward_as, decode_path_parts,
+    decode_path_with_cost, Decoded,
 };
-pub use subset::{optimise_subset, optimise_subset_as, Solver, SubsetResult, Terms, MAX_POOL};
+pub use subset::{
+    optimise_subset, optimise_subset_as, optimise_subset_parts, Solver, SubsetResult, Terms,
+    MAX_POOL,
+};

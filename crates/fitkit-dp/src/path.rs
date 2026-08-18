@@ -92,6 +92,39 @@ where
         .map(|decoded| decoded.map(|path| build(&path)))
 }
 
+/// Decode the best path, and build one part per step from the state chosen there.
+///
+/// The route a caller assembling something from a decode should take, and the counterpart of
+/// [`optimise_subset_parts`](crate::optimise_subset_parts).
+///
+/// [`decode_path_as`] hands the builder the whole path, and a builder holding the answer can
+/// ignore it and return something prepared. `part` is asked about one step and the state the
+/// search put there, and never sees the path, so what it returns cannot depend on an answer it
+/// was not told. The framework assembles, so there is exactly one part per step: a caller cannot
+/// return a different number of pieces than the search decided on.
+///
+/// # Errors
+///
+/// As [`decode_path_with_cost`].
+pub fn decode_path_parts<E, T, P, F>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    part: F,
+) -> Answer<Chosen<Vec<P>>>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    F: Fn(usize, usize) -> P,
+{
+    decode_path_with_cost(steps, states, transition_weight, emission, transition).map(|decoded| {
+        decoded
+            .map(|path| path.iter().enumerate().map(|(step, &state)| part(step, state)).collect())
+    })
+}
+
 /// As [`decode_path_onward`], building the caller's own result inside the same call.
 ///
 /// See [`decode_path_as`] for why the building happens here rather than afterwards.
