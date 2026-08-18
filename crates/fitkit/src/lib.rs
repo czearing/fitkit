@@ -64,7 +64,7 @@ pub use fitkit_core::{
 #[doc(inline)]
 pub use fitkit_dp::{
     decode_margins, decode_path, decode_path_as, decode_path_with_cost, optimise_subset,
-    optimise_subset_as, Chosen, Decoded, Solver, SubsetResult, Trace,
+    optimise_subset_as, Chosen, Decoded, Solver, SubsetResult, Terms, Trace,
 };
 #[doc(inline)]
 pub use fitkit_feasible::{Feasible, Problem, Requirement, Row, Sense};
@@ -79,7 +79,7 @@ pub mod prelude {
         ask, decode_path, decode_path_as, margins, optimise_subset, optimise_subset_as, recover,
         within, Answer, Chosen, Citation, Confidence, Control, Cost, Evidence, Feasible, Fit, Law,
         Margin, Model, Plan, Problem, Record, Refusal, Reported, Requirement, Row, Scale,
-        Segmented, Sense, Span, Trace,
+        Segmented, Sense, Span, Terms, Trace,
     };
 }
 

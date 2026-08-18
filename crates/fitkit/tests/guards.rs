@@ -76,10 +76,59 @@ fn recovery_is_deterministic() {
 
 #[test]
 fn a_wide_beam_finds_the_proven_optimum() {
-    assert_beam_matches_exact(14, 512, |members| {
-        let size = f64::from(members.count_ones());
-        f64::from(members.count_ones() % 5) * 2.0 - 0.4 * size * size
-    });
+    let pool = 14;
+    let mut terms = Terms::over(pool).expect("a pool to choose from");
+    for item in 0..pool {
+        terms = terms
+            .worth(
+                item,
+                Evidence::certain(Span::new(item, item + 1), 1.0 - 0.15 * (item % 4) as f64),
+            )
+            .expect("a finite weight over a real span");
+    }
+    for a in 0..pool {
+        for b in a + 1..pool {
+            let value = ((a * 7 + b * 5) % 11) as f64 / 11.0 - 0.6;
+            terms = terms
+                .together(a, b, Evidence::certain(Span::new(a, b + 1), value))
+                .expect("a finite weight over a real span");
+        }
+    }
+    assert_beam_matches_exact(&terms, 512);
+}
+
+/// The objective cannot be handed the answer, because there is nowhere to write one down.
+///
+/// A subset search whose score took the candidate mask could be told what to return in one line,
+/// and would return it through a real enumeration carrying an honest trace. [`Terms`] is stated
+/// over the items instead, so the only way to make a subset win is to say what its members are
+/// worth — a claim that has to cite a span, is discounted by the trust it is held with, and
+/// therefore holds for every pool those items appear in rather than for one answer.
+#[test]
+fn what_makes_a_subset_win_is_a_cited_claim_about_its_items() {
+    let span = Span::new(0, 4);
+    let terms = Terms::over(4)
+        .expect("a pool to choose from")
+        .worth(0, Evidence::certain(span, 5.0))
+        .expect("a cited weight")
+        .worth(1, Evidence::certain(span, -5.0))
+        .expect("a cited weight")
+        .worth(2, Evidence::new(span, Confidence::new(0.5), 4.0))
+        .expect("a cited weight")
+        .worth(3, Evidence::certain(span, -1.0))
+        .expect("a cited weight");
+
+    let chosen = optimise_subset(&terms, 4, 1).expect("four items offer subsets");
+    let members = chosen.get().members();
+    assert_eq!(members, 0b0101, "the items the evidence argued for, and no others");
+    assert!(!terms.support(members).is_empty(), "the answer names where it came from");
+    assert!(chosen.trace().decided(), "every item was weighed both ways");
+
+    // The same claims over a different pool give a different answer, which a lookup table keyed on
+    // the mask could not do.
+    let narrowed = terms.at_most(1).expect("a budget");
+    let fewer = optimise_subset(&narrowed, 4, 1).expect("four items offer subsets");
+    assert_eq!(fewer.get().members(), 0b0001, "the strongest claim survived the budget");
 }
 
 /// The rule that keeps an engine measuring: no derived quantity may descend from an identity.

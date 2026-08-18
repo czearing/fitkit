@@ -20,9 +20,24 @@ fact enters through `Fit::evidence`, which is what makes "the answer is evidence
 **Validity is separate from derivation** so the gate cannot be skipped. `Law::derive` is only
 reachable through `ask`, which calls `admits` first.
 
-**Search is separate from the domain.** `decode_path` and `optimise_subset` take closures and know
-nothing about what they are optimising. There is one implementation of each, so a bug in the
-search is a bug in one place.
+**Search is separate from the domain.** `decode_path` and `optimise_subset` know nothing about what
+they are optimising. There is one implementation of each, so a bug in the search is a bug in one
+place.
+
+**An objective cannot see the answer it is scoring.** `decode_path` asks its model about one
+position and one pair of states at a time. `optimise_subset` takes `Terms`: what each item is worth,
+what a pair is worth together, which items are mandatory or excluded, and how many may be taken.
+Neither can be handed a subset or a path, so neither can be written as a table keyed on the answer.
+This is the difference between a model and a template, and it is enforced by the argument types
+rather than by review: `|members| if members == 0b1011 { 1.0 } else { 0.0 }` was once one line, and
+the search around it was real — genuine enumeration, genuine optimum, an honest `Chosen` with an
+honest trace. Sealing the result type does not touch that; changing the shape of the objective does.
+
+**A weight is evidence, not a number.** Every term carries the `Span` it speaks for and the
+`Confidence` it is held with, and contributes its magnitude scaled by that trust. A weight over an
+empty span or at zero confidence is refused, so a constant somebody tuned until the output looked
+right has nowhere to sit. What a search chose can be traced back through `Terms::support` to the
+regions that argued for it, and reported with `Terms::trust`.
 
 **Recovery is a free function, not a trait method.** `recover` cannot be overridden, so no model
 can quietly substitute its own pipeline.

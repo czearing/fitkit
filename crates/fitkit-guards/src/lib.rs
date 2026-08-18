@@ -6,7 +6,7 @@
 use std::fmt::Debug;
 
 use fitkit_core::{Cost, Plan, Scale};
-use fitkit_dp::optimise_subset;
+use fitkit_dp::{optimise_subset, Terms};
 use fitkit_feasible::{Feasible, Problem};
 use fitkit_fit::{recover, Fit, Model, Segmented};
 
@@ -176,12 +176,11 @@ where
 /// # Panics
 ///
 /// If the beam is too narrow to be trusted at this pool size.
-pub fn assert_beam_matches_exact<S>(pool: usize, beam_width: usize, score: S)
-where
-    S: Fn(u64) -> f64 + Copy,
-{
-    let exact = optimise_subset(pool, pool, 1, score).expect("an empty pool proves nothing");
-    let beam = optimise_subset(pool, 0, beam_width, score).expect("an empty pool proves nothing");
+pub fn assert_beam_matches_exact(terms: &Terms, beam_width: usize) {
+    let pool = terms.pool();
+    let exact = optimise_subset(terms, pool, 1).expect("terms nothing can satisfy prove nothing");
+    let beam =
+        optimise_subset(terms, 0, beam_width).expect("terms nothing can satisfy prove nothing");
     assert!(
         (exact.cost() - beam.cost()).abs() < 1e-9,
         "beam scored {} against a proven optimum of {}",
@@ -293,7 +292,7 @@ mod tests {
         assert_margin_holds, assert_untrusted_spans_stay_silent, forbid_derivations_from,
         forbid_symbols,
     };
-    use super::{Cost, Scale};
+    use super::{Cost, Scale, Terms};
 
     #[test]
     fn a_scale_sized_for_the_real_worst_step_holds() {
@@ -355,9 +354,24 @@ mod tests {
         }
     }
 
-    fn score(members: u64) -> f64 {
-        let count = f64::from(members.count_ones());
-        f64::from(members.count_ones() % 7) - 0.3 * count
+    /// A pairwise model whose optimum is an interior subset, so the beam has something to miss.
+    fn terms(pool: usize) -> Terms {
+        let mut built = Terms::over(pool).expect("a pool to choose from");
+        for item in 0..pool {
+            let span = Span::new(item, item + 1);
+            built = built
+                .worth(item, Evidence::certain(span, 1.0 - 0.2 * (item % 4) as f64))
+                .expect("a finite weight over a real span");
+        }
+        for a in 0..pool {
+            for b in a + 1..pool {
+                let value = ((a * 7 + b * 5) % 11) as f64 / 11.0 - 0.6;
+                built = built
+                    .together(a, b, Evidence::certain(Span::new(a, b + 1), value))
+                    .expect("a finite weight over a real span");
+            }
+        }
+        built
     }
 
     #[test]
@@ -410,7 +424,7 @@ mod tests {
 
     #[test]
     fn a_wide_beam_matches_exact() {
-        assert_beam_matches_exact(12, 256, score);
+        assert_beam_matches_exact(&terms(12), 256);
     }
 
     #[test]

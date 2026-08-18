@@ -5,7 +5,8 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use fitkit_dp::{decode_path, optimise_subset};
+use fitkit_core::{Evidence, Span};
+use fitkit_dp::{decode_path, optimise_subset, Terms};
 
 fn main() {
     bench("decode_path 4096x16", 50, || {
@@ -30,20 +31,23 @@ fn main() {
         black_box(path.expect("the grid offers rival states").len())
     });
 
+    let model = |pool: usize| {
+        let mut built = Terms::over(pool).expect("a pool to choose from");
+        for item in 0..pool {
+            let span = Span::new(item, item + 1);
+            built = built
+                .worth(item, Evidence::certain(span, 1.0))
+                .expect("a finite weight over a real span");
+        }
+        built
+    };
+
     bench("optimise_subset exact 20", 5, || {
-        black_box(
-            optimise_subset(20, 20, 1, |members| f64::from(members.count_ones()))
-                .expect("the pool offers subsets")
-                .cost(),
-        )
+        black_box(optimise_subset(&model(20), 20, 1).expect("the pool offers subsets").cost())
     });
 
     bench("optimise_subset beam 64 width 128", 20, || {
-        black_box(
-            optimise_subset(64, 0, 128, |members| f64::from(members.count_ones()))
-                .expect("the pool offers subsets")
-                .cost(),
-        )
+        black_box(optimise_subset(&model(64), 0, 128).expect("the pool offers subsets").cost())
     });
 }
 
