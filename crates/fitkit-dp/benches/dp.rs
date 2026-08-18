@@ -31,11 +31,19 @@ fn main() {
     });
 
     bench("optimise_subset exact 20", 5, || {
-        black_box(optimise_subset(20, 20, 1, |members| f64::from(members.count_ones())).score)
+        black_box(
+            optimise_subset(20, 20, 1, |members| f64::from(members.count_ones()))
+                .expect("the pool offers subsets")
+                .cost(),
+        )
     });
 
     bench("optimise_subset beam 64 width 128", 20, || {
-        black_box(optimise_subset(64, 0, 128, |members| f64::from(members.count_ones())).score)
+        black_box(
+            optimise_subset(64, 0, 128, |members| f64::from(members.count_ones()))
+                .expect("the pool offers subsets")
+                .cost(),
+        )
     });
 }
 

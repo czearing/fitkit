@@ -180,13 +180,13 @@ pub fn assert_beam_matches_exact<S>(pool: usize, beam_width: usize, score: S)
 where
     S: Fn(u64) -> f64 + Copy,
 {
-    let exact = optimise_subset(pool, pool, 1, score);
-    let beam = optimise_subset(pool, 0, beam_width, score);
+    let exact = optimise_subset(pool, pool, 1, score).expect("an empty pool proves nothing");
+    let beam = optimise_subset(pool, 0, beam_width, score).expect("an empty pool proves nothing");
     assert!(
-        (exact.score - beam.score).abs() < 1e-9,
+        (exact.cost() - beam.cost()).abs() < 1e-9,
         "beam scored {} against a proven optimum of {}",
-        beam.score,
-        exact.score
+        beam.cost(),
+        exact.cost()
     );
 }
 
