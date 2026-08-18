@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 
 use fitkit_core::{Answer, Control, Evidence, Margin, Plan, Refusal, Span};
 use fitkit_dp::{
-    decode_margins, decode_margins_onward, decode_path_into, decode_path_onward,
-    decode_path_with_cost, Chosen,
+    decode_margins, decode_margins_onward, decode_path_as, decode_path_into_as,
+    decode_path_onward_as, Chosen,
 };
 
 /// A signal that can be cut into spans and put back together.
@@ -206,46 +206,51 @@ pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Answer<Chosen<Plan<F
     let emission =
         |step: usize, state: usize| model.emission(&evidence[step].value, &candidates[state]);
     let transition = |from: usize, to: usize| model.transition(&candidates[from], &candidates[to]);
-    let decoded = if model.onward(&candidates[0]).is_some() {
-        decode_path_onward(
-            evidence.len(),
-            candidates.len(),
-            model.transition_weight(),
-            emission,
-            transition,
-            |from| model.onward(&candidates[from]).unwrap_or_default(),
-        )
-    } else if model.into(&candidates[0]).is_some() {
-        decode_path_into(
-            evidence.len(),
-            candidates.len(),
-            model.transition_weight(),
-            emission,
-            transition,
-            |to| model.into(&candidates[to]).unwrap_or_default(),
-        )
-    } else {
-        decode_path_with_cost(
-            evidence.len(),
-            candidates.len(),
-            model.transition_weight(),
-            emission,
-            transition,
-        )
-    }?;
-
-    Ok(decoded.map(|path| {
+    // Built inside the decode rather than mapped out of it afterwards, for the reason
+    // `decode_path_as` gives: a witness that can be transformed is a witness that can be minted.
+    let build = |path: &[usize]| {
         let controls = evidence
             .iter()
             .zip(path)
-            .map(|(span, state)| Control {
+            .map(|(span, &state)| Control {
                 span: span.span,
                 params: model.refine(candidates[state].clone(), &span.value),
                 confidence: span.confidence,
             })
             .collect();
         model.settle(Plan { controls }, reference)
-    }))
+    };
+
+    if model.onward(&candidates[0]).is_some() {
+        decode_path_onward_as(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+            |from| model.onward(&candidates[from]).unwrap_or_default(),
+            build,
+        )
+    } else if model.into(&candidates[0]).is_some() {
+        decode_path_into_as(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+            |to| model.into(&candidates[to]).unwrap_or_default(),
+            build,
+        )
+    } else {
+        decode_path_as(
+            evidence.len(),
+            candidates.len(),
+            model.transition_weight(),
+            emission,
+            transition,
+            build,
+        )
+    }
 }
 
 /// How much error each span survives before the decode changes.

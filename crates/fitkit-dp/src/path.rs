@@ -58,6 +58,100 @@ where
         .map(Chosen::into_inner)
 }
 
+/// Decode, and build the caller's own result from the path in the same call.
+///
+/// This is how a caller obtains a [`Chosen`] over a type of its own. `build` runs on the decoded
+/// path before any witness exists, so there is nothing yet to launder, and the witness that comes
+/// back describes the search that produced the path `build` was given.
+///
+/// It exists because [`Chosen`] deliberately has no public `map`. An arbitrary transformation of a
+/// witness already in hand is a mint: one honest search would license any number of witnessed
+/// values it never produced. Here each witnessed value costs one search.
+///
+/// # Errors
+///
+/// As [`decode_path`].
+///
+/// # Panics
+///
+/// As [`decode_path_with_cost`].
+pub fn decode_path_as<E, T, B, U>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    build: B,
+) -> Answer<Chosen<U>>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    B: FnOnce(&[usize]) -> U,
+{
+    decode_path_with_cost(steps, states, transition_weight, emission, transition)
+        .map(|decoded| decoded.map(|path| build(&path)))
+}
+
+/// As [`decode_path_onward`], building the caller's own result inside the same call.
+///
+/// See [`decode_path_as`] for why the building happens here rather than afterwards.
+///
+/// # Errors
+///
+/// As [`decode_path_onward`].
+///
+/// # Panics
+///
+/// As [`decode_path_onward`].
+pub fn decode_path_onward_as<E, T, O, B, U>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    onward: O,
+    build: B,
+) -> Answer<Chosen<U>>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    O: Fn(usize) -> Vec<u32>,
+    B: FnOnce(&[usize]) -> U,
+{
+    decode_path_onward(steps, states, transition_weight, emission, transition, onward)
+        .map(|decoded| decoded.map(|path| build(&path)))
+}
+
+/// As [`decode_path_into`], building the caller's own result inside the same call.
+///
+/// See [`decode_path_as`] for why the building happens here rather than afterwards.
+///
+/// # Errors
+///
+/// As [`decode_path_into`].
+///
+/// # Panics
+///
+/// As [`decode_path_into`].
+pub fn decode_path_into_as<E, T, I, B, U>(
+    steps: usize,
+    states: usize,
+    transition_weight: f64,
+    emission: E,
+    transition: T,
+    into: I,
+    build: B,
+) -> Answer<Chosen<U>>
+where
+    E: Fn(usize, usize) -> f64,
+    T: Fn(usize, usize) -> f64,
+    I: Fn(usize) -> Vec<u32>,
+    B: FnOnce(&[usize]) -> U,
+{
+    decode_path_into(steps, states, transition_weight, emission, transition, into)
+        .map(|decoded| decoded.map(|path| build(&path)))
+}
+
 /// As [`decode_path`], keeping the witness: the cost paid, and what the search turned down.
 /// Runs in `O(steps * states^2)` time. Each cost closure is called once per distinct argument.
 ///

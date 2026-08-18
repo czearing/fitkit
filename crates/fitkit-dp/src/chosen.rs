@@ -40,7 +40,17 @@ impl<T> Chosen<T> {
     }
 
     /// Carry the result forward, keeping the account of the search that produced it.
-    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Chosen<U> {
+    ///
+    /// Confined to this crate on purpose. A public `map` taking an arbitrary closure is a mint: a
+    /// caller runs one honest decode and then turns it into any number of witnessed values that
+    /// the search never produced, each carrying a trace describing work that had nothing to do
+    /// with it. That is the forgery this type exists to prevent, wearing the type itself.
+    ///
+    /// A caller that wants a witness over its own type asks the mechanism to build it, with
+    /// [`decode_path_as`](crate::decode_path_as) and its siblings. The builder runs before any
+    /// witness exists, so there is nothing to launder, and each witnessed value costs one real
+    /// search rather than one search and unlimited transformations.
+    pub(crate) fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Chosen<U> {
         Chosen { value: f(self.value), cost: self.cost, trace: self.trace }
     }
 
@@ -62,7 +72,7 @@ impl<T> Chosen<T> {
 /// The refusal is on the first, not the second. A model with one candidate is a formality dressed
 /// as a search. A model offering three candidates on evidence so clear that two are impossible did
 /// exactly what it was asked to do, and refusing it would punish a decisive answer.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Trace {
     steps: usize,
     states: usize,

@@ -153,3 +153,30 @@ fn a_reported_margin_is_the_error_the_answer_survives() {
 
     assert_margin_holds(&problem);
 }
+
+/// A witness over a caller's own type can only be got by asking the mechanism to build it.
+///
+/// This test lives outside `fitkit-dp` on purpose. Inside that crate `Chosen::map` is reachable,
+/// so the property under test — that a caller cannot transform a witness it already holds into
+/// one over any value it likes — is only observable from a crate that does not own the type.
+/// Written as a use of the sanctioned route rather than as a check on the unsanctioned one: the
+/// forgery is not expressible here, so there is nothing to assert about it.
+#[test]
+fn a_witness_over_a_foreign_type_is_built_by_the_search() {
+    #[derive(Debug, PartialEq)]
+    struct Pick(usize);
+
+    let chosen = fitkit::dp::decode_path_as(
+        4,
+        3,
+        1.0,
+        |step, state| ((step + state) % 3) as f64,
+        |from, to| (from as f64 - to as f64).abs(),
+        |path| Pick(path.len()),
+    )
+    .expect("three candidates a step gave the search something to weigh");
+
+    assert_eq!(chosen.get(), &Pick(4), "the built value came from the decoded path");
+    assert!(chosen.trace().decided(), "the model offered rivals rather than a formality");
+    assert_eq!(chosen.trace().steps(), 4);
+}

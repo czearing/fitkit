@@ -116,6 +116,34 @@ where
     Ok(Chosen::new(best, best.score, Trace::new(pool, pool, tally)))
 }
 
+/// Maximise `score` over subsets, and build the caller's own result in the same call.
+///
+/// The counterpart of [`decode_path_as`](crate::decode_path_as), and there for the same reason:
+/// [`Chosen`] has no public `map`, so a witness over a caller's type is built by the mechanism
+/// rather than transformed out of one already in hand.
+///
+/// # Errors
+///
+/// As [`optimise_subset`].
+///
+/// # Panics
+///
+/// As [`optimise_subset`].
+pub fn optimise_subset_as<S, B, U>(
+    pool: usize,
+    exact_limit: usize,
+    beam_width: usize,
+    score: S,
+    build: B,
+) -> Answer<Chosen<U>>
+where
+    S: Fn(u64) -> f64,
+    B: FnOnce(&SubsetResult) -> U,
+{
+    optimise_subset(pool, exact_limit, beam_width, score)
+        .map(|chosen| chosen.map(|result| build(&result)))
+}
+
 fn exact<S: Fn(u64) -> f64>(pool: usize, score: &S, tally: &mut Tally) -> SubsetResult {
     let mut best = SubsetResult::new(0, f64::NEG_INFINITY, Solver::Exact);
     let mut runner_up = f64::NEG_INFINITY;
