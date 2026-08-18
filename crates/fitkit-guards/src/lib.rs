@@ -124,7 +124,11 @@ where
     F: Fit,
     F::Params: Debug,
 {
-    let plan = recover(model, reference);
+    let Ok(plan) = recover(model, reference) else {
+        // A refusal is the stronger form of the same promise: no evidence, so no controls.
+        return;
+    };
+    let plan = plan.get();
     assert!(plan.is_identity(), "{} invented {:?} from no evidence", model.name(), plan.controls);
 }
 
@@ -139,8 +143,10 @@ where
     F::Params: Debug,
 {
     let evidence = model.evidence(reference);
-    let plan = recover(model, reference);
-    for (measured, control) in evidence.iter().zip(&plan.controls) {
+    let Ok(plan) = recover(model, reference) else {
+        return;
+    };
+    for (measured, control) in evidence.iter().zip(&plan.get().controls) {
         assert!(
             measured.is_informative() || control.is_silent(),
             "{} acts on {:?} where the evidence carried nothing",
@@ -160,7 +166,7 @@ where
     F: Fit,
     F::Params: Debug + PartialEq,
 {
-    let first: Plan<F::Params> = recover(model, reference);
+    let first = recover(model, reference);
     let second = recover(model, reference);
     assert!(first == second, "{} recovered two different plans from one reference", model.name());
 }
@@ -476,7 +482,9 @@ mod tests {
                 "inventor"
             }
             fn candidates(&self) -> Vec<u8> {
-                vec![9]
+                // Two, so the decode has something to weigh and answers. A model offering one is
+                // refused before it can invent anything, which is a different guard.
+                vec![9, 8]
             }
             fn render(&self, _input: &(), _params: &u8) {}
         }

@@ -6,9 +6,10 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use fitkit_core::{Control, Evidence, Margin, Plan, Span};
+use fitkit_core::{Answer, Control, Evidence, Margin, Plan, Refusal, Span};
 use fitkit_dp::{
-    decode_margins, decode_margins_onward, decode_path, decode_path_into, decode_path_onward,
+    decode_margins, decode_margins_onward, decode_path_into, decode_path_onward,
+    decode_path_with_cost, Chosen,
 };
 
 /// A signal that can be cut into spans and put back together.
@@ -182,18 +183,30 @@ pub trait Fit: Model {
 /// Measure, decode the lowest-cost path through the candidates, refine each span with what was
 /// measured, then settle. A free function, so no model can override the pipeline.
 ///
-/// Returns [`Plan::identity`] when there is no evidence or no candidate.
-pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Plan<F::Params> {
+/// The plan comes back inside the witness the decode produced. A caller cannot build one, so a
+/// plan that reaches this crate's consumers is a plan the search returned rather than one someone
+/// assembled; [`Chosen::map`] carries it onward without losing that account.
+///
+/// # Errors
+///
+/// Refuses when the reference yields no evidence, when the model offers no candidate, and when no
+/// step ever gave the search two candidates to weigh. The last is the one worth naming: a model
+/// with a single candidate produces a correct path and no decision, and returning that as a
+/// recovered plan would dress a foregone conclusion as a fit.
+pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Answer<Chosen<Plan<F::Params>>> {
     let evidence = model.evidence(reference);
     let candidates = model.candidates();
-    if evidence.is_empty() || candidates.is_empty() {
-        return Plan::identity();
+    if evidence.is_empty() {
+        return Err(Refusal::unreported("the reference yielded no evidence to fit"));
+    }
+    if candidates.is_empty() {
+        return Err(Refusal::unreported("the model offered no candidate to fit with"));
     }
 
     let emission =
         |step: usize, state: usize| model.emission(&evidence[step].value, &candidates[state]);
     let transition = |from: usize, to: usize| model.transition(&candidates[from], &candidates[to]);
-    let path = if model.onward(&candidates[0]).is_some() {
+    let decoded = if model.onward(&candidates[0]).is_some() {
         decode_path_onward(
             evidence.len(),
             candidates.len(),
@@ -202,7 +215,6 @@ pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Plan<F::Params> {
             transition,
             |from| model.onward(&candidates[from]).unwrap_or_default(),
         )
-        .path
     } else if model.into(&candidates[0]).is_some() {
         decode_path_into(
             evidence.len(),
@@ -212,28 +224,28 @@ pub fn recover<F: Fit>(model: &F, reference: &F::Signal) -> Plan<F::Params> {
             transition,
             |to| model.into(&candidates[to]).unwrap_or_default(),
         )
-        .path
     } else {
-        decode_path(
+        decode_path_with_cost(
             evidence.len(),
             candidates.len(),
             model.transition_weight(),
             emission,
             transition,
         )
-    };
+    }?;
 
-    let controls = evidence
-        .iter()
-        .zip(path)
-        .map(|(span, state)| Control {
-            span: span.span,
-            params: model.refine(candidates[state].clone(), &span.value),
-            confidence: span.confidence,
-        })
-        .collect();
-
-    model.settle(Plan { controls }, reference)
+    Ok(decoded.map(|path| {
+        let controls = evidence
+            .iter()
+            .zip(path)
+            .map(|(span, state)| Control {
+                span: span.span,
+                params: model.refine(candidates[state].clone(), &span.value),
+                confidence: span.confidence,
+            })
+            .collect();
+        model.settle(Plan { controls }, reference)
+    }))
 }
 
 /// How much error each span survives before the decode changes.
@@ -287,7 +299,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use fitkit_core::{Confidence, Control, Evidence, Plan, Span};
+    use fitkit_core::{Confidence, Control, Evidence, Plan, RefusalKind, Span};
 
     use super::{margins, recover, Fit, Model};
 
@@ -343,15 +355,16 @@ mod tests {
     #[test]
     fn recovery_follows_the_evidence_when_nothing_resists_change() {
         let model = Gain { observed: vec![2.0, 0.0, 3.0] };
-        let plan = recover(&model, &vec![1.0]);
-        let recovered: Vec<i64> = plan.controls.iter().map(|c| c.params).collect();
+        let plan = recover(&model, &vec![1.0]).expect("the model offered a choice");
+        let recovered: Vec<i64> = plan.get().controls.iter().map(|c| c.params).collect();
         assert_eq!(recovered, [2, 0, 3]);
     }
 
     #[test]
-    fn no_evidence_recovers_the_identity_plan() {
+    fn no_evidence_is_refused_rather_than_answered_with_the_identity() {
         let model = Gain { observed: Vec::new() };
-        assert!(recover(&model, &vec![1.0]).is_identity());
+        let refused = recover(&model, &vec![1.0]).expect_err("there was nothing to fit");
+        assert_eq!(refused.kind(), RefusalKind::Unreported);
     }
 
     #[test]
@@ -377,7 +390,8 @@ mod tests {
                 f64::from(u8::from(evidence != params))
             }
         }
-        assert!(recover(&Unsure, &()).is_identity(), "zero confidence must stay silent");
+        let plan = recover(&Unsure, &()).expect("two candidates were offered");
+        assert!(plan.get().is_identity(), "zero confidence must stay silent");
     }
 
     #[test]

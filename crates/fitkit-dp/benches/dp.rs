@@ -16,7 +16,7 @@ fn main() {
             |step, state| ((step * 31 + state * 17) % 23) as f64,
             |from, to| (from as f64 - to as f64).abs(),
         );
-        black_box(path.len())
+        black_box(path.expect("the grid offers rival states").len())
     });
 
     bench("decode_path 512x64", 50, || {
@@ -27,7 +27,7 @@ fn main() {
             |step, state| ((step * 31 + state * 17) % 23) as f64,
             |from, to| (from as f64 - to as f64).abs(),
         );
-        black_box(path.len())
+        black_box(path.expect("the grid offers rival states").len())
     });
 
     bench("optimise_subset exact 20", 5, || {

@@ -8,9 +8,11 @@
 
 extern crate alloc;
 
+mod chosen;
 mod path;
 mod subset;
 
+pub use chosen::{Chosen, Trace};
 pub use path::{
     decode_margins, decode_margins_onward, decode_path, decode_path_into, decode_path_onward,
     decode_path_with_cost, Decoded,

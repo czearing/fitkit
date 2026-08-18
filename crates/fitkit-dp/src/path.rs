@@ -1,13 +1,27 @@
+use crate::chosen::{Chosen, Tally, Trace};
 use alloc::vec;
 use alloc::vec::Vec;
+use fitkit_core::{Answer, Refusal};
 
-/// A decoded path and the cost paid for it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Decoded {
-    /// One candidate index per step.
-    pub path: Vec<usize>,
-    /// Total emission plus weighted transition cost, infinite if any step was impossible.
-    pub cost: f64,
+/// A decoded path and the search that produced it.
+///
+/// Reached only by running a decode. See [`Chosen`] for why the type has no constructor.
+pub type Decoded = Chosen<Vec<usize>>;
+
+/// A problem with nothing in it.
+const EMPTY: Refusal = Refusal::unreported("a decode needs at least one step and one candidate");
+
+/// A problem whose answer was never in doubt.
+const SETTLED: Refusal =
+    Refusal::uninformative("no step offered an affordable alternative to the path returned");
+
+/// Hand back a witness, or refuse a search that had nothing to decide.
+fn witnessed(path: Vec<usize>, cost: f64, trace: Trace) -> Answer<Decoded> {
+    if trace.decided() {
+        Ok(Chosen::new(path, cost, trace))
+    } else {
+        Err(SETTLED)
+    }
 }
 
 /// Decode the lowest-cost sequence of candidates.
@@ -19,7 +33,14 @@ pub struct Decoded {
 /// A cost that is not finite means impossible, negative infinity included, so no cost can be
 /// better than free. Impossible steps are counted rather than summed, so a passage nothing
 /// explains does not erase the decisions around it. Paths are ordered by that count first and by
-/// cost second. An empty problem returns an empty path.
+/// cost second.
+///
+/// # Errors
+///
+/// Refuses an empty problem, and refuses one where no step ever offered an affordable alternative
+/// to the path returned. The second case is a corridor rather than a search: the answer was the
+/// only answer, and returning it as a decoded result would dress a foregone conclusion as a
+/// choice.
 ///
 /// Runs in `O(steps * states^2)` time. Each cost closure is called once per distinct argument.
 pub fn decode_path<E, T>(
@@ -28,16 +49,21 @@ pub fn decode_path<E, T>(
     transition_weight: f64,
     emission: E,
     transition: T,
-) -> Vec<usize>
+) -> Answer<Vec<usize>>
 where
     E: Fn(usize, usize) -> f64,
     T: Fn(usize, usize) -> f64,
 {
-    decode_path_with_cost(steps, states, transition_weight, emission, transition).path
+    decode_path_with_cost(steps, states, transition_weight, emission, transition)
+        .map(Chosen::into_inner)
 }
 
-/// As [`decode_path`], also reporting total cost, which makes two models comparable.
+/// As [`decode_path`], keeping the witness: the cost paid, and what the search turned down.
 /// Runs in `O(steps * states^2)` time. Each cost closure is called once per distinct argument.
+///
+/// # Errors
+///
+/// As [`decode_path`].
 ///
 /// # Panics
 ///
@@ -49,22 +75,23 @@ pub fn decode_path_with_cost<E, T>(
     transition_weight: f64,
     emission: E,
     transition: T,
-) -> Decoded
+) -> Answer<Decoded>
 where
     E: Fn(usize, usize) -> f64,
     T: Fn(usize, usize) -> f64,
 {
     if steps == 0 || states == 0 {
-        return Decoded { path: Vec::new(), cost: 0.0 };
+        return Err(EMPTY);
     }
     assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
 
     let jump = jump_table(states, transition_weight, transition);
-    let decoded = trellis::<false, _>(steps, states, &jump, &emission);
-    if decoded.cost.is_finite() {
-        return decoded;
+    let (path, cost, tally) = trellis::<false, _>(steps, states, &jump, &emission);
+    if cost.is_finite() {
+        return witnessed(path, cost, Trace::new(steps, states, tally));
     }
-    Decoded { path: trellis::<true, _>(steps, states, &jump, &emission).path, cost: f64::INFINITY }
+    let (path, _, tally) = trellis::<true, _>(steps, states, &jump, &emission);
+    witnessed(path, f64::INFINITY, Trace::new(steps, states, tally))
 }
 
 /// One pass of the trellis.
@@ -79,7 +106,8 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
     states: usize,
     jump: &[f64],
     emission: &E,
-) -> Decoded {
+) -> (Vec<usize>, f64, Tally) {
+    let mut tally = Tally::new();
     let mut breaks = vec![0_u32; states];
     let mut cost = vec![0.0; states];
     for state in 0..states {
@@ -92,14 +120,23 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
         for to in 0..states {
             let mut best_breaks = if COUNT { u32::MAX } else { 0 };
             let (mut best_cost, mut best_from) = (f64::INFINITY, 0);
+            let mut affordable = 0_u64;
             for (from, &previous) in cost.iter().enumerate() {
                 let carried = if COUNT { breaks[from] } else { 0 };
                 let (b, c) = pay::<COUNT>(carried, previous, jump[from * states + to]);
+                if c.is_finite() {
+                    affordable += 1;
+                }
                 if b < best_breaks || (b == best_breaks && c < best_cost) {
                     (best_breaks, best_cost, best_from) = (b, c, from);
                 }
             }
             let emitted = payable(emission(step, to));
+            // A step nothing can explain is not a decision about how to reach it, whatever the
+            // ways in cost, so the alternatives weighed here only count where the step is payable.
+            if emitted.is_finite() {
+                tally.decision(states as u64, affordable);
+            }
             (best_breaks, best_cost) = pay::<COUNT>(best_breaks, best_cost, emitted);
             next_cost[to] = best_cost;
             if COUNT {
@@ -115,12 +152,21 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
 
     let mut total_breaks = if COUNT { u32::MAX } else { 0 };
     let (mut end, mut total) = (0, f64::INFINITY);
+    let (mut finishers, mut runner_up) = (0_u64, f64::INFINITY);
     for state in 0..states {
         let b = if COUNT { breaks[state] } else { 0 };
+        if cost[state].is_finite() {
+            finishers += 1;
+        }
         if b < total_breaks || (b == total_breaks && cost[state] < total) {
+            runner_up = runner_up.min(total);
             (total_breaks, total, end) = (b, cost[state], state);
+        } else {
+            runner_up = runner_up.min(cost[state]);
         }
     }
+    tally.decision(states as u64, finishers);
+    tally.ended(total, runner_up);
 
     let mut path = vec![0; steps];
     path[steps - 1] = end;
@@ -129,7 +175,7 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
         path[step - 1] = end;
     }
 
-    Decoded { path, cost: total }
+    (path, total, tally)
 }
 
 /// The lowest-cost path, when a state goes on to only a few others.
@@ -141,6 +187,10 @@ fn trellis<const COUNT: bool, E: Fn(usize, usize) -> f64>(
 ///
 /// `onward` names the states each state may go on to, by index into the grid.
 ///
+/// # Errors
+///
+/// As [`decode_path`].
+///
 /// # Panics
 ///
 /// If `onward` names a state outside the grid, or if `states` exceeds the backpointer width.
@@ -151,17 +201,18 @@ pub fn decode_path_onward<E, T, O>(
     emission: E,
     transition: T,
     onward: O,
-) -> Decoded
+) -> Answer<Decoded>
 where
     E: Fn(usize, usize) -> f64,
     T: Fn(usize, usize) -> f64,
     O: Fn(usize) -> Vec<u32>,
 {
     if steps == 0 || states == 0 {
-        return Decoded { path: Vec::new(), cost: 0.0 };
+        return Err(EMPTY);
     }
     assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
 
+    let mut tally = Tally::new();
     // Asked for one state at a time and kept, rather than laid out in full before the decode
     // starts. A model that names its own reachable states usually has far more states than any
     // one signal can visit, and building every list costs more than the decode it serves. The
@@ -189,13 +240,18 @@ where
     // stamp no step can match and the array needs no other clearing.
     let mut asked: Vec<usize> = vec![0; states];
     let mut priced: Vec<usize> = Vec::new();
+    // How many ways into each priced state the step was offered, and how many of those could be
+    // paid for. The first says whether the step was a decision at all, the second how contested it
+    // was once the evidence had spoken.
+    let mut offers: Vec<u64> = vec![0; states];
+    let mut ways: Vec<u64> = vec![0; states];
     // Where each live state was reached from. Held for the states a step actually reaches rather
     // than for the whole grid at every step, which would allocate a backpointer for each state
     // the sentence was never in and spend more on clearing it than the decode costs.
     let mut came: Vec<u32> = vec![0; states];
     let mut trail: Vec<Vec<(u32, u32)>> = vec![Vec::new(); steps];
 
-    for step in 1..steps {
+    for (step, seen) in trail.iter_mut().enumerate().skip(1) {
         priced.clear();
         for &from in &live {
             let previous = cost[from];
@@ -218,12 +274,18 @@ where
                     asked[to] = step;
                     here[to] = payable(emission(step, to));
                     next[to] = f64::INFINITY;
+                    offers[to] = 0;
+                    ways[to] = 0;
                     priced.push(to);
                 }
+                offers[to] += 1;
                 if !here[to].is_finite() {
                     continue;
                 }
                 let total = previous + weighted(from, to);
+                if total.is_finite() {
+                    ways[to] += 1;
+                }
                 if total < next[to] {
                     next[to] = total;
                     came[to] = u32::try_from(from).unwrap_or(0);
@@ -237,6 +299,9 @@ where
         for &state in &priced {
             let paid = next[state] + here[state];
             cost[state] = paid;
+            if here[state].is_finite() {
+                tally.decision(offers[state], ways[state]);
+            }
             if paid.is_finite() {
                 live.push(state);
             }
@@ -245,16 +310,11 @@ where
         // ways into a state is settled by which was offered first. Reaching them in the order the
         // search happened to find them would decide ties differently.
         live.sort_unstable();
-        trail[step] =
+        *seen =
             live.iter().map(|&state| (u32::try_from(state).unwrap_or(0), came[state])).collect();
     }
 
-    let (mut end, mut total) = (0, f64::INFINITY);
-    for (state, &paid) in cost.iter().enumerate() {
-        if paid < total {
-            (total, end) = (paid, state);
-        }
-    }
+    let (mut end, total) = finish(&cost, &mut tally);
 
     let mut path = vec![0; steps];
     path[steps - 1] = end;
@@ -265,7 +325,7 @@ where
         path[step - 1] = end;
     }
 
-    Decoded { path, cost: total }
+    witnessed(path, total, Trace::new(steps, states, tally))
 }
 
 /// How much worse the best alternative is, at each step.
@@ -704,6 +764,28 @@ fn payable(cost: f64) -> f64 {
     }
 }
 
+/// The end of a path: which state finished cheapest, what it cost, and how much worse the best
+/// other finisher was. Choosing between the ways a path can end is itself a decision, and for a
+/// one-step problem it is the only one there is.
+fn finish(cost: &[f64], tally: &mut Tally) -> (usize, f64) {
+    let (mut end, mut total) = (0, f64::INFINITY);
+    let (mut finishers, mut runner_up) = (0_u64, f64::INFINITY);
+    for (state, &paid) in cost.iter().enumerate() {
+        if paid.is_finite() {
+            finishers += 1;
+        }
+        if paid < total {
+            runner_up = runner_up.min(total);
+            (total, end) = (paid, state);
+        } else {
+            runner_up = runner_up.min(paid);
+        }
+    }
+    tally.decision(cost.len() as u64, finishers);
+    tally.ended(total, runner_up);
+    (end, total)
+}
+
 /// Add one step to a running total. With `COUNT` on, a step that cannot be paid is counted instead
 /// of summed, which keeps it from erasing the costs around it.
 #[inline]
@@ -733,6 +815,10 @@ fn pay<const COUNT: bool>(breaks: u32, cost: f64, step: f64) -> (u32, f64) {
 /// distinct argument. Passing every state for every step gives exactly [`decode_path_with_cost`],
 /// at the cost of building the lists.
 ///
+/// # Errors
+///
+/// As [`decode_path`].
+///
 /// # Panics
 ///
 /// If `states` exceeds `u32::MAX`, the width of the backpointer table, or if `into` names a state
@@ -745,17 +831,18 @@ pub fn decode_path_into<E, T, I>(
     emission: E,
     transition: T,
     into: I,
-) -> Decoded
+) -> Answer<Decoded>
 where
     E: Fn(usize, usize) -> f64,
     T: Fn(usize, usize) -> f64,
     I: Fn(usize) -> Vec<u32>,
 {
     if steps == 0 || states == 0 {
-        return Decoded { path: Vec::new(), cost: 0.0 };
+        return Err(EMPTY);
     }
     assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
 
+    let mut tally = Tally::new();
     let reached: Vec<Vec<u32>> = (0..states).map(&into).collect();
     for list in &reached {
         for &from in list {
@@ -787,28 +874,28 @@ where
                 continue;
             }
             let (mut best, mut best_from) = (f64::INFINITY, 0_u32);
+            let mut affordable = 0_u64;
             for &from in &reached[to] {
                 let previous = cost[from as usize];
                 if !previous.is_finite() {
                     continue;
                 }
                 let total = previous + weighted(from as usize, to);
+                if total.is_finite() {
+                    affordable += 1;
+                }
                 if total < best {
                     (best, best_from) = (total, from);
                 }
             }
+            tally.decision(reached[to].len() as u64, affordable);
             next[to] = best + here;
             back[step * states + to] = best_from;
         }
         cost.copy_from_slice(&next);
     }
 
-    let (mut end, mut total) = (0, f64::INFINITY);
-    for (state, &paid) in cost.iter().enumerate() {
-        if paid < total {
-            (total, end) = (paid, state);
-        }
-    }
+    let (mut end, total) = finish(&cost, &mut tally);
 
     let mut path = vec![0; steps];
     path[steps - 1] = end;
@@ -817,7 +904,7 @@ where
         path[step - 1] = end;
     }
 
-    Decoded { path, cost: total }
+    witnessed(path, total, Trace::new(steps, states, tally))
 }
 
 fn jump_table<T: Fn(usize, usize) -> f64>(states: usize, weight: f64, transition: T) -> Vec<f64> {
@@ -839,16 +926,19 @@ mod tests {
     use super::{
         decode_margins, decode_margins_onward, decode_path, decode_path_into, decode_path_with_cost,
     };
+    use fitkit_core::RefusalKind;
 
     #[test]
     fn naming_every_state_decodes_exactly_as_the_dense_search_does() {
         let observed = [1.0, 0.0, 1.0, 1.0, 0.0];
         let emission = |step: usize, state: usize| (observed[step] - state as f64).abs();
         let transition = |from: usize, to: usize| (from as f64 - to as f64).abs();
-        let dense = decode_path_with_cost(5, 3, 1.0, emission, transition);
-        let sparse = decode_path_into(5, 3, 1.0, emission, transition, |_| vec![0, 1, 2]);
-        assert_eq!(dense.path, sparse.path);
-        assert!((dense.cost - sparse.cost).abs() < 1e-9);
+        let dense = decode_path_with_cost(5, 3, 1.0, emission, transition)
+            .expect("the search decided something");
+        let sparse = decode_path_into(5, 3, 1.0, emission, transition, |_| vec![0, 1, 2])
+            .expect("the search decided something");
+        assert_eq!(dense.get(), sparse.get());
+        assert!((dense.cost() - sparse.cost()).abs() < 1e-9);
     }
 
     #[test]
@@ -863,8 +953,9 @@ mod tests {
             } else {
                 vec![0, 2]
             }
-        });
-        assert_eq!(&decoded.path[1..], &[0, 0, 0]);
+        })
+        .expect("the search decided something");
+        assert_eq!(&decoded.get()[1..], &[0, 0, 0]);
     }
 
     #[test]
@@ -879,8 +970,9 @@ mod tests {
             } else {
                 vec![u32::try_from(to).unwrap_or(0) - 1]
             }
-        });
-        assert_eq!(decoded.path, vec![0, 1, 2, 3]);
+        })
+        .expect("the search decided something");
+        assert_eq!(decoded.get(), &vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -892,7 +984,8 @@ mod tests {
             0.0,
             |step, state| f64::from(u8::from(observed[step] != state)),
             |_, _| 1.0,
-        );
+        )
+        .expect("the search decided something");
         assert_eq!(path, observed);
     }
 
@@ -905,20 +998,80 @@ mod tests {
             50.0,
             |step, state| f64::from(u8::from(observed[step] != state)),
             |from, to| f64::from(u8::from(from != to)),
-        );
+        )
+        .expect("the search decided something");
         assert_eq!(path, [1, 1, 1, 1, 1]);
     }
 
     #[test]
-    fn an_empty_problem_decodes_to_an_empty_path() {
-        assert!(decode_path(0, 4, 1.0, |_, _| 0.0, |_, _| 0.0).is_empty());
-        assert!(decode_path(4, 0, 1.0, |_, _| 0.0, |_, _| 0.0).is_empty());
+    fn an_empty_problem_is_refused_rather_than_answered() {
+        for (steps, states) in [(0, 4), (4, 0)] {
+            let refused = decode_path(steps, states, 1.0, |_, _| 0.0, |_, _| 0.0)
+                .expect_err("nothing was there to decode");
+            assert_eq!(refused.kind(), RefusalKind::Unreported);
+        }
+    }
+
+    #[test]
+    fn a_model_with_one_candidate_is_refused_rather_than_witnessed() {
+        // The shape a forged search takes: one state, a constant emission, nothing to weigh. The
+        // trellis runs and the path is correct, and it is not a decode of anything.
+        let refused = decode_path_with_cost(6, 1, 1.0, |_, _| 0.5, |_, _| 0.0)
+            .expect_err("one candidate is not a choice");
+        assert_eq!(refused.kind(), RefusalKind::Uninformative);
+    }
+
+    #[test]
+    fn evidence_that_rules_out_every_rival_is_still_a_decode() {
+        // Two candidates offered, one impossible at every step. The model did its part, so the
+        // decode answers and says in its trace that nothing affordable was turned down.
+        let decoded = decode_path_with_cost(
+            4,
+            2,
+            0.0,
+            |_, state| if state == 0 { f64::INFINITY } else { 1.0 },
+            |_, _| 0.0,
+        )
+        .expect("the model offered a choice");
+        assert_eq!(decoded.get(), &vec![1, 1, 1, 1]);
+        assert!(decoded.trace().choices() > 0);
+        assert_eq!(decoded.trace().rejected(), 0, "the evidence settled it, not the cost");
+    }
+
+    #[test]
+    fn a_contested_decode_reports_what_it_turned_down() {
+        let observed = [1.0, 0.0, 1.0, 1.0, 0.0];
+        let decoded = decode_path_with_cost(
+            5,
+            3,
+            1.0,
+            |step: usize, state: usize| (observed[step] - state as f64).abs(),
+            |from: usize, to: usize| (from as f64 - to as f64).abs(),
+        )
+        .expect("the model offered a choice");
+        let trace = decoded.trace();
+        assert!(trace.rejected() > 0, "affordable rivals lost");
+        assert!(trace.considered() >= trace.rejected());
+        assert!(trace.margin().is_finite(), "another path finished");
+    }
+
+    #[test]
+    fn a_witness_cannot_be_rebuilt_from_the_result_it_carries() {
+        // The compiler enforces this: Chosen has no public constructor, so the only way to hold
+        // one is to have run a decode. What can be done is to carry a decoded result forward.
+        let decoded = decode_path_with_cost(3, 2, 0.0, |_, state| state as f64, |_, _| 0.0)
+            .expect("the model offered a choice");
+        let rejected = decoded.trace().rejected();
+        let mapped = decoded.map(|path| path.len());
+        assert_eq!(*mapped.get(), 3);
+        assert_eq!(mapped.trace().rejected(), rejected, "the account survives the transformation");
     }
 
     #[test]
     fn a_nan_cost_never_wins() {
         let path =
-            decode_path(2, 2, 0.0, |_, state| if state == 0 { f64::NAN } else { 1.0 }, |_, _| 0.0);
+            decode_path(2, 2, 0.0, |_, state| if state == 0 { f64::NAN } else { 1.0 }, |_, _| 0.0)
+                .expect("the search decided something");
         assert_eq!(path, [1, 1]);
     }
 
@@ -932,15 +1085,16 @@ mod tests {
             weight,
             |step, state| emissions[step][state],
             |from, to| f64::from(u8::from(from != to)),
-        );
-        let mut recomputed = emissions[0][decoded.path[0]];
+        )
+        .expect("the search decided something");
+        let mut recomputed = emissions[0][decoded.get()[0]];
         for step in 1..3 {
-            recomputed += emissions[step][decoded.path[step]];
-            if decoded.path[step - 1] != decoded.path[step] {
+            recomputed += emissions[step][decoded.get()[step]];
+            if decoded.get()[step - 1] != decoded.get()[step] {
                 recomputed += weight;
             }
         }
-        assert!((decoded.cost - recomputed).abs() < 1e-12);
+        assert!((decoded.cost() - recomputed).abs() < 1e-12);
     }
 
     #[test]
@@ -949,7 +1103,8 @@ mod tests {
         let emission = |step: usize, state: usize| ((step * 7 + state * 13) % 11) as f64 / 3.0;
         let transition = |from: usize, to: usize| (from as f64 - to as f64).abs();
 
-        let decoded = decode_path_with_cost(steps, states, weight, emission, transition);
+        let decoded = decode_path_with_cost(steps, states, weight, emission, transition)
+            .expect("the search decided something");
 
         let mut best = f64::INFINITY;
         for encoded in 0..states.pow(u32::try_from(steps).unwrap()) {
@@ -966,7 +1121,7 @@ mod tests {
             }
             best = best.min(cost);
         }
-        assert!((decoded.cost - best).abs() < 1e-9);
+        assert!((decoded.cost() - best).abs() < 1e-9);
     }
 
     #[test]
@@ -976,10 +1131,11 @@ mod tests {
             _ => f64::from(u8::from(state != 1)) * 500.0,
         };
 
-        let decoded = decode_path_with_cost(3, 2, 0.0, emission, |_, _| 0.0);
+        let decoded = decode_path_with_cost(3, 2, 0.0, emission, |_, _| 0.0)
+            .expect("the search decided something");
 
-        assert_eq!(decoded.path, vec![1, 0, 1]);
-        assert!(decoded.cost.is_infinite(), "an impossible step costs infinity");
+        assert_eq!(decoded.get(), &vec![1, 0, 1]);
+        assert!(decoded.cost().is_infinite(), "an impossible step costs infinity");
     }
 
     #[test]
@@ -989,7 +1145,8 @@ mod tests {
             _ => 1e9,
         };
 
-        let path = decode_path(4, 2, 0.0, emission, |_, _| 0.0);
+        let path =
+            decode_path(4, 2, 0.0, emission, |_, _| 0.0).expect("the search decided something");
 
         assert_eq!(path, vec![1, 1, 1, 1], "a payable step beats a cheaper impossible one");
     }
@@ -1006,7 +1163,8 @@ mod tests {
         };
         let transition = |from: usize, to: usize| f64::from(u8::from(from != to));
 
-        let decoded = decode_path_with_cost(steps, states, weight, emission, transition);
+        let decoded = decode_path_with_cost(steps, states, weight, emission, transition)
+            .expect("the search decided something");
         let margins = decode_margins(steps, states, weight, emission, transition);
 
         let score = |path: &[usize]| {
@@ -1050,11 +1208,11 @@ mod tests {
         };
 
         let best = every_path(None);
-        assert_eq!(score(&decoded.path), best, "the decode is the best path, breaks first");
+        assert_eq!(score(decoded.get()), best, "the decode is the best path, breaks first");
 
         for (step, &margin) in margins.iter().enumerate() {
             let alternative = (0..states)
-                .filter(|&state| state != decoded.path[step])
+                .filter(|&state| state != decoded.get()[step])
                 .map(|state| every_path(Some((step, state))))
                 .fold((u32::MAX, f64::INFINITY), better);
             let expected =
@@ -1073,7 +1231,8 @@ mod tests {
         let emission = |step: usize, state: usize| ((step * 5 + state * 7) % 9) as f64 / 2.0;
         let transition = |from: usize, to: usize| (from as f64 - to as f64).abs();
 
-        let decoded = decode_path_with_cost(steps, states, weight, emission, transition);
+        let decoded = decode_path_with_cost(steps, states, weight, emission, transition)
+            .expect("the search decided something");
         let margins = decode_margins(steps, states, weight, emission, transition);
 
         let total = |path: &[usize]| {
@@ -1094,12 +1253,12 @@ mod tests {
                     *slot = rest % states;
                     rest /= states;
                 }
-                if path[step] != decoded.path[step] {
+                if path[step] != decoded.get()[step] {
                     best_alternative = best_alternative.min(total(&path));
                 }
             }
             assert!(
-                (margin - (best_alternative - decoded.cost)).abs() < 1e-9,
+                (margin - (best_alternative - decoded.cost())).abs() < 1e-9,
                 "step {step} reported margin {margin}"
             );
         }
@@ -1114,10 +1273,11 @@ mod tests {
             _ => 0.0,
         };
 
-        let decoded = decode_path_with_cost(2, 2, 0.0, emission, |_, _| 0.0);
+        let decoded = decode_path_with_cost(2, 2, 0.0, emission, |_, _| 0.0)
+            .expect("the search decided something");
 
-        assert_eq!(decoded.path, vec![1, 1], "no cost is better than free");
-        assert!((decoded.cost - 5.0).abs() < f64::EPSILON, "the cost is the payable path");
+        assert_eq!(decoded.get(), &vec![1, 1], "no cost is better than free");
+        assert!((decoded.cost() - 5.0).abs() < f64::EPSILON, "the cost is the payable path");
     }
 
     #[test]

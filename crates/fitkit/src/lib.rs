@@ -6,7 +6,7 @@
 //! | Layer | What it gives you |
 //! | --- | --- |
 //! | [`core`] | [`Confidence`], [`Cost`], [`Scale`], [`Margin`], [`Evidence`], [`Reported`], [`Refusal`], [`Plan`] |
-//! | [`dp`] | [`decode_path`] for sequences, [`optimise_subset`] for sets |
+//! | [`dp`] | [`decode_path`] for sequences, [`optimise_subset`] for sets, both behind [`Chosen`] |
 //! | [`fit`] | [`Model`] and [`Fit`], recovered by [`recover`] and applied by [`Model::apply_plan`] |
 //! | [`feasible`] | [`Problem`] and [`Requirement`], solved for a region and its [`Margin`] |
 //! | [`ledger`] | [`Law`] and [`Record`], reached through [`ask`] |
@@ -42,7 +42,9 @@
 //! }
 //!
 //! let model = Thermostat(vec![20.1, 19.8, 23.9, 20.2, 20.0]);
-//! let plan = recover(&model, &Vec::new());
+//! let decoded = recover(&model, &Vec::new()).expect("seven setpoints were weighed");
+//! assert!(decoded.trace().decided(), "the search had rivals to turn down");
+//! let plan = decoded.get();
 //! assert!(plan.controls.iter().all(|c| c.params == 20), "one noisy reading is not a new setpoint");
 //! ```
 
@@ -61,8 +63,8 @@ pub use fitkit_core::{
 };
 #[doc(inline)]
 pub use fitkit_dp::{
-    decode_margins, decode_path, decode_path_with_cost, optimise_subset, Decoded, Solver,
-    SubsetResult,
+    decode_margins, decode_path, decode_path_with_cost, optimise_subset, Chosen, Decoded, Solver,
+    SubsetResult, Trace,
 };
 #[doc(inline)]
 pub use fitkit_feasible::{Feasible, Problem, Requirement, Row, Sense};
@@ -74,9 +76,9 @@ pub use fitkit_ledger::{ask, within, Citation, Law, Record};
 /// Everything needed to write a model.
 pub mod prelude {
     pub use crate::{
-        ask, decode_path, margins, optimise_subset, recover, within, Answer, Citation, Confidence,
-        Control, Cost, Evidence, Feasible, Fit, Law, Margin, Model, Plan, Problem, Record, Refusal,
-        Reported, Requirement, Row, Scale, Segmented, Sense, Span,
+        ask, decode_path, margins, optimise_subset, recover, within, Answer, Chosen, Citation,
+        Confidence, Control, Cost, Evidence, Feasible, Fit, Law, Margin, Model, Plan, Problem,
+        Record, Refusal, Reported, Requirement, Row, Scale, Segmented, Sense, Span, Trace,
     };
 }
 

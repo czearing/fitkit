@@ -99,9 +99,11 @@ fn main() {
         ],
     };
 
-    let plan = recover(&Thermostat, &log);
+    let decoded = recover(&Thermostat, &log).expect("the model offers a setpoint to choose from");
     let tolerance = margins(&Thermostat, &log);
 
+    println!("searched {}", decoded.trace());
+    let plan = decoded.get();
     println!("{plan}");
     for (control, margin) in plan.controls.iter().zip(&tolerance) {
         let verdict = if control.is_silent() {
@@ -117,7 +119,7 @@ fn main() {
     assert_eq!(held, [20, 20, 20, 20, 20, 20, 23, 23, 23]);
 
     // Writing the answer back leaves the dropouts exactly as they were found.
-    let corrected = Thermostat.apply_plan(&log, &plan);
+    let corrected = Thermostat.apply_plan(&log, plan);
     assert_eq!(corrected.readings[6], None, "a span with no evidence is not written to");
     assert_eq!(corrected.readings[2], Some(20.0), "the spike is replaced by the held setpoint");
 

@@ -67,7 +67,10 @@ let log = vec![
     None, None,
     Some(23.0), Some(23.1), Some(22.9),
 ];
-let plan = recover(&Thermostat, &log);
+// `recover` hands back the plan inside the witness the search produced. You cannot build one, so
+// a plan you are holding is a plan something searched for.
+let decoded = recover(&Thermostat, &log).expect("seven setpoints were weighed against the log");
+let plan = decoded.get();
 
 assert_eq!(plan.at(2).unwrap().params, 20);   // the spike is absorbed
 assert!(plan.at(6).unwrap().is_silent());     // the dropout is left alone
@@ -78,7 +81,7 @@ let tolerance = margins(&Thermostat, &log);
 assert!(tolerance[2] < tolerance[0], "the spike is the least safe decision in the record");
 
 // Writing the answer back leaves spans with no evidence exactly as they were.
-let corrected = Thermostat.apply_plan(&log, &plan);
+let corrected = Thermostat.apply_plan(&log, plan);
 assert_eq!(corrected[6], None);
 ```
 

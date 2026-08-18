@@ -1,6 +1,6 @@
 [package]
 name = "fitkit-dp"
-description = "Dependency-free dynamic programming: path decoding and bitmask subset optimisation."
+description = "Dynamic programming: path decoding and bitmask subset optimisation, behind a witness."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,12 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[dependencies]
+fitkit-core.workspace = true
+
 [features]
 default = ["std"]
-std = []
+std = ["fitkit-core/std"]
 
 [[bench]]
 name = "dp"
