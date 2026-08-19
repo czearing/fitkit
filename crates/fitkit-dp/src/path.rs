@@ -11,6 +11,14 @@ pub type Decoded = Chosen<Vec<usize>>;
 /// A problem with nothing in it.
 const EMPTY: Refusal = Refusal::unreported("a decode needs at least one step and one candidate");
 
+/// More states than the trail that remembers where each one was reached from can name.
+///
+/// A caller who has this many states has a different problem from the one this solves, and is
+/// owed that answer rather than a panic from inside a library.
+const WIDE: Refusal = Refusal::incoherent(
+    "more states than the backpointer that records where each was reached from",
+);
+
 /// A problem whose answer was never in doubt.
 const SETTLED: Refusal =
     Refusal::uninformative("no step offered an affordable alternative to the path returned");
@@ -210,7 +218,9 @@ where
     if steps == 0 || states == 0 {
         return Err(EMPTY);
     }
-    assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
+    if u32::try_from(states).is_err() {
+        return Err(WIDE);
+    }
 
     let jump = jump_table(states, transition_weight, transition);
     let (path, cost, tally) = trellis::<false, _>(steps, states, &jump, &emission);
@@ -337,7 +347,9 @@ where
     if steps == 0 || states == 0 {
         return Err(EMPTY);
     }
-    assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
+    if u32::try_from(states).is_err() {
+        return Err(WIDE);
+    }
 
     let mut tally = Tally::new();
     // Asked for one state at a time and kept, rather than laid out in full before the decode
@@ -967,7 +979,9 @@ where
     if steps == 0 || states == 0 {
         return Err(EMPTY);
     }
-    assert!(u32::try_from(states).is_ok(), "{states} states exceeds the backpointer width");
+    if u32::try_from(states).is_err() {
+        return Err(WIDE);
+    }
 
     let mut tally = Tally::new();
     let reached: Vec<Vec<u32>> = (0..states).map(&into).collect();
@@ -1054,6 +1068,99 @@ mod tests {
         decode_margins, decode_margins_onward, decode_path, decode_path_into, decode_path_with_cost,
     };
     use fitkit_core::RefusalKind;
+
+    /// The three decodes are one search, so on the same model they must return the same path.
+    ///
+    /// Random emissions and random transitions, with a third of the moves forbidden outright, so
+    /// the sparse forms have something to be sparse about and the dense form has to price the
+    /// impossible moves it is handed. A disagreement is one of them decoding a different path,
+    /// which no consumer could detect from the outside: all three return an authentic witness.
+    #[test]
+    fn the_sparse_decodes_answer_exactly_what_the_dense_decode_answers() {
+        for seed in 0..200_u64 {
+            let steps = 3 + (seed % 6) as usize;
+            let states = 2 + (seed % 5) as usize;
+            let mut noise = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(11);
+            let mut next = move || {
+                noise = noise
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (noise >> 33) % 1000
+            };
+            let emissions: alloc::vec::Vec<f64> =
+                (0..steps * states).map(|_| next() as f64 / 100.0).collect();
+            let moves: alloc::vec::Vec<f64> = (0..states * states)
+                .map(|_| {
+                    let draw = next();
+                    if draw % 3 == 0 {
+                        f64::INFINITY
+                    } else {
+                        draw as f64 / 100.0
+                    }
+                })
+                .collect();
+            // Every state keeps one way in and one way out, so no model is unsolvable.
+            let mut moves = moves;
+            for state in 0..states {
+                moves[state * states + state] = 1.0;
+            }
+            let emission = |step: usize, state: usize| emissions[step * states + state];
+            let transition = |from: usize, to: usize| moves[from * states + to];
+            let onward = |from: usize| {
+                (0..states)
+                    .filter(|&to| moves[from * states + to].is_finite())
+                    .map(|to| u32::try_from(to).expect("a state index inside a small model"))
+                    .collect::<alloc::vec::Vec<u32>>()
+            };
+            let into = |to: usize| {
+                (0..states)
+                    .filter(|&from| moves[from * states + to].is_finite())
+                    .map(|from| u32::try_from(from).expect("a state index inside a small model"))
+                    .collect::<alloc::vec::Vec<u32>>()
+            };
+            let dense = decode_path_with_cost(steps, states, 1.0, emission, transition)
+                .expect("a model with a way through");
+            let forward =
+                super::decode_path_onward(steps, states, 1.0, emission, transition, onward)
+                    .expect("a model with a way through");
+            let backward = decode_path_into(steps, states, 1.0, emission, transition, into)
+                .expect("a model with a way through");
+            assert!(
+                (dense.cost() - forward.cost()).abs() < 1e-9,
+                "seed {seed}: dense cost {} against onward cost {}",
+                dense.cost(),
+                forward.cost()
+            );
+            assert!(
+                (dense.cost() - backward.cost()).abs() < 1e-9,
+                "seed {seed}: dense cost {} against into cost {}",
+                dense.cost(),
+                backward.cost()
+            );
+            assert_eq!(
+                dense.get(),
+                forward.get(),
+                "seed {seed}: dense and onward decoded different paths"
+            );
+            assert_eq!(
+                dense.get(),
+                backward.get(),
+                "seed {seed}: dense and into decoded different paths"
+            );
+        }
+    }
+
+    /// More states than the trail can name is an answer this cannot give, not a reason to panic.
+    ///
+    /// The check happens before anything is allocated, so a caller who asks gets told rather than
+    /// killed. A library that panics takes the decision about how to fail away from its caller.
+    #[test]
+    fn more_states_than_the_trail_can_name_is_refused_rather_than_a_panic() {
+        let states = u32::MAX as usize + 1;
+        let refused = decode_path_with_cost(2, states, 1.0, |_, _| 1.0, |_, _| 0.0)
+            .expect_err("more states than a backpointer can name");
+        assert_eq!(refused.kind(), RefusalKind::Incoherent);
+    }
 
     #[test]
     fn naming_every_state_decodes_exactly_as_the_dense_search_does() {

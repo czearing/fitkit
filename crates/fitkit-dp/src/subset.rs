@@ -5,6 +5,14 @@ use fitkit_core::{Answer, Confidence, Evidence, Refusal, Span};
 
 use crate::chosen::{Chosen, Tally, Trace};
 
+/// How wide a pool may be before enumerating every subset of it stops being an answer.
+///
+/// Each further item doubles the work, so beyond this the exact search is not slow but absent:
+/// it is the same result arriving after the caller has gone, and a caller that asked for it by
+/// raising the limit gets a refusal rather than a search that never returns. The beam has no
+/// such bound and is what a wider pool is for.
+const MOST_ENUMERATED: usize = 24;
+
 /// Largest pool a `u64` mask can hold.
 pub const MAX_POOL: usize = 64;
 
@@ -408,7 +416,11 @@ pub fn optimise_subset(
     let pool = terms.pool;
     let mut tally = Tally::new();
     let best = if pool <= exact_limit {
-        assert!(pool < 63, "exact enumeration of {pool} items is not affordable");
+        if pool > MOST_ENUMERATED {
+            return Err(Refusal::incoherent(
+                "enumerating every subset of this pool is more work than an answer is worth",
+            ));
+        }
         exact(terms, &mut tally)
     } else {
         beam(terms, beam_width.max(1), &mut tally)
@@ -587,6 +599,66 @@ fn beam(terms: &Terms, width: usize, tally: &mut Tally) -> Option<SubsetResult> 
 
 #[cfg(test)]
 mod tests {
+    /// A search that cannot afford the answer says so, rather than starting and never finishing.
+    ///
+    /// Twenty-five items is thirty-three million subsets and the doubling has only started. The
+    /// old code asserted its way to a panic at sixty-three and ran happily at forty, which is a
+    /// search that returns after the caller has gone.
+    #[test]
+    fn an_enumeration_beyond_what_it_can_afford_is_refused_rather_than_started() {
+        let pool = MOST_ENUMERATED + 1;
+        let mut built = Terms::over(pool).expect("a pool to choose from");
+        for item in 0..pool {
+            built = built
+                .worth(item, Evidence::certain(Span::new(item, item + 1), 1.0))
+                .expect("a finite weight over a real span");
+        }
+        let refused = optimise_subset(&built, pool, 8).expect_err("an unaffordable enumeration");
+        assert_eq!(refused.kind(), RefusalKind::Incoherent);
+        optimise_subset(&built, 0, 8).expect("a beam has no such bound");
+    }
+
+    /// A beam as wide as the pool has room for every state and must find what enumeration finds.
+    ///
+    /// Random weights and random pairs, both signs, so the optimum is an interior subset that no
+    /// greedy rule reaches by luck. Any disagreement here is the beam losing a state it had room
+    /// to keep, which is a defect in the search and not the price of approximating.
+    #[test]
+    fn a_beam_wide_enough_to_hold_every_state_agrees_with_enumeration() {
+        for seed in 0..200_u64 {
+            let pool = 4 + (seed % 8) as usize;
+            let mut noise = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let mut next = || {
+                noise = noise
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                ((noise >> 33) % 2000) as f64 / 1000.0 - 1.0
+            };
+            let mut built = Terms::over(pool).expect("a pool to choose from");
+            for item in 0..pool {
+                let span = Span::new(item, item + 1);
+                built = built
+                    .worth(item, Evidence::certain(span, next()))
+                    .expect("a finite weight over a real span");
+            }
+            for a in 0..pool {
+                for b in a + 1..pool {
+                    built = built
+                        .together(a, b, Evidence::certain(Span::new(a, b + 1), next()))
+                        .expect("a finite weight over a real span");
+                }
+            }
+            let enumerated = optimise_subset(&built, pool, 1).expect("a best subset");
+            let beamed = optimise_subset(&built, 0, 1 << pool).expect("a best subset");
+            assert!(
+                (enumerated.cost() - beamed.cost()).abs() < 1e-9,
+                "seed {seed}: enumeration scored {} and a beam with room for every state scored {}",
+                enumerated.cost(),
+                beamed.cost()
+            );
+        }
+    }
+
     /// A beam must not stop growing because of the order the items were declared in.
     ///
     /// Every weight here is positive and no pair is, so the best subset is the whole pool and
@@ -615,7 +687,7 @@ mod tests {
 
     use fitkit_core::{Confidence, Evidence, RefusalKind, Span};
 
-    use super::{optimise_subset, Solver, Terms, MAX_POOL};
+    use super::{optimise_subset, Solver, Terms, MAX_POOL, MOST_ENUMERATED};
 
     /// A pairwise model with a size penalty, so the optimum is an interior subset.
     ///
