@@ -356,7 +356,7 @@ where
     let mut cost: Vec<f64> = (0..states).map(|state| payable(emission(0, state))).collect();
     // The states a path can still be in. Every other state costs infinity, and a step spent
     // sweeping them re-reads the whole grid to learn what it already knew. Carrying the live ones
-    // makes a step cost what the sentence reaches rather than what the model could describe.
+    // makes a step cost what the signal reaches rather than what the model could describe.
     let mut live: Vec<usize> = (0..states).filter(|&state| cost[state].is_finite()).collect();
     // Written before they are read, at the step that reaches them, so neither needs a starting
     // value: `priced` records exactly which entries of this step are meaningful.
@@ -374,7 +374,7 @@ where
     let mut ways: Vec<u64> = vec![0; states];
     // Where each live state was reached from. Held for the states a step actually reaches rather
     // than for the whole grid at every step, which would allocate a backpointer for each state
-    // the sentence was never in and spend more on clearing it than the decode costs.
+    // the signal was never in and spend more on clearing it than the decode costs.
     let mut came: Vec<u32> = vec![0; states];
     let mut trail: Vec<Vec<(u32, u32)>> = vec![Vec::new(); steps];
 
@@ -932,8 +932,8 @@ fn pay<const COUNT: bool>(breaks: u32, cost: f64, step: f64) -> (u32, f64) {
 /// closure is never asked about a pair that cannot occur.
 ///
 /// This is what a search over structured state needs. When a state carries context as well as a
-/// label, such as a grammatical category together with what the clause around it has already seen,
-/// the number of states multiplies but the number of ways to reach any one of them does not: the
+/// label, such as an operating mode together with how long the equipment has been held in it, the
+/// number of states multiplies but the number of ways to reach any one of them does not: the
 /// context that follows is decided by the context before it and the label chosen. A dense decode
 /// pays `states^2` per step regardless and spends nearly all of it proving that impossible moves
 /// are impossible.

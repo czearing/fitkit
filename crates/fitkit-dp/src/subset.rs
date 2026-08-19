@@ -451,7 +451,7 @@ where
 /// should take.
 ///
 /// [`optimise_subset_as`] hands the caller's builder the whole [`SubsetResult`], and a builder
-/// that has the answer can disregard it: `|_| "a sentence nobody searched for"` typechecks, and
+/// that has the answer can disregard it: `|_| "an answer nobody searched for"` typechecks, and
 /// what comes back is a witness with an authentic cost over content the search had no part in.
 /// That is the same hole [`Terms`] closed in the objective, one level further out.
 ///

@@ -1,8 +1,8 @@
-//! What a consumer that composes prose is forced into when it migrates onto this framework.
+//! What a consumer that assembles a report out of evidence is forced into when it migrates here.
 //!
 //! The engine this was written for had a generator that claimed to be a dynamic program and was
 //! two dozen `format!` frames behind a greedy fold. Every gate it had passed: it built, it linted,
-//! it was covered by tests, and the sentences it produced were correct English about real counts.
+//! it was covered by tests, and the lines it produced were correct statements about real counts.
 //! Nothing distinguished it from a search except reading it.
 //!
 //! These tests are the framework's side of that migration. They do not inspect a consumer's source
@@ -176,7 +176,7 @@ fn the_same_claim_wins_or_loses_on_the_trust_behind_it() {
 /// A composer with nothing worth saying has an outcome that is not an empty document.
 ///
 /// The old generator had no way to say "the evidence supports nothing here", so a section with no
-/// findings still produced a heading and a sentence. A refusal is what removes the pressure.
+/// findings still produced a heading and a line under it. A refusal is what removes the pressure.
 #[test]
 fn a_pool_that_supports_nothing_is_refused_rather_than_composed_into_silence() {
     let nothing = Terms::over(2)
@@ -224,7 +224,7 @@ fn ordering_is_decoded_and_the_parts_follow_the_decode() {
 ///
 /// So the framework fixes the shape of a composed output to the shape of the evidence, and leaves
 /// the content of each piece to the consumer. Closing that last gap needs a type the consumer owns
-/// — a sentence with no public constructor — which per-crate privacy puts outside a framework's
+/// — a piece with no public constructor — which per-crate privacy puts outside a framework's
 /// reach. Recorded here so the boundary is in the repository and not only in a reply.
 #[test]
 fn a_part_may_be_a_list_and_the_count_of_parts_still_belongs_to_the_search() {
