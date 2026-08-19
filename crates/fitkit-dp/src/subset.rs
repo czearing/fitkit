@@ -531,8 +531,12 @@ fn beam(terms: &Terms, width: usize, tally: &mut Tally) -> Option<SubsetResult> 
     for _ in 0..pool {
         grown.clear();
         for &(members, _) in &frontier {
-            let first = MAX_POOL - members.leading_zeros() as usize;
-            for item in first..pool {
+            // Every item the state does not hold, not only the ones above its highest. Growing in
+            // index order alone means a beam that has kept states built from late items can add
+            // nothing to any of them, and the search stops at whatever size it had reached rather
+            // than at the answer. Which items an item may join is a property of the terms, and the
+            // terms say nothing about the order they were declared in.
+            for item in 0..pool {
                 let bit = 1 << item;
                 if terms.forbidden & bit != 0 || members & bit != 0 {
                     continue;
@@ -547,6 +551,10 @@ fn beam(terms: &Terms, width: usize, tally: &mut Tally) -> Option<SubsetResult> 
         if grown.is_empty() {
             break;
         }
+        // The same subset is reached by as many orders as it has members, and a beam that spends
+        // its width on copies of one state is a narrower beam than it was asked to be.
+        grown.sort_unstable_by_key(|state| state.0);
+        grown.dedup_by_key(|state| state.0);
         grown.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
         let offered = grown.len();
         grown.truncate(width);
@@ -579,6 +587,32 @@ fn beam(terms: &Terms, width: usize, tally: &mut Tally) -> Option<SubsetResult> 
 
 #[cfg(test)]
 mod tests {
+    /// A beam must not stop growing because of the order the items were declared in.
+    ///
+    /// Every weight here is positive and no pair is, so the best subset is the whole pool and
+    /// there is nothing to trade off. A beam that may only add an item above the highest it
+    /// already holds fills with states built from the last items and can then add nothing, so it
+    /// answers with a handful of them and reports that as the optimum.
+    #[test]
+    fn a_beam_reaches_the_whole_pool_when_every_item_is_worth_taking() {
+        let pool = 30;
+        let mut built = Terms::over(pool).expect("a pool to choose from");
+        for item in 0..pool {
+            let span = Span::new(item, item + 1);
+            // Rising with the index, so the states a beam keeps are the ones built from the end.
+            let worth = 1.0 + item as f64;
+            built = built
+                .worth(item, Evidence::certain(span, worth))
+                .expect("a finite weight over a real span");
+        }
+        let chosen = optimise_subset(&built, 10, 16).expect("a pool this size has a best subset");
+        assert_eq!(
+            chosen.get().indices().count(),
+            pool,
+            "every item is worth taking, so the answer is all of them"
+        );
+    }
+
     use fitkit_core::{Confidence, Evidence, RefusalKind, Span};
 
     use super::{optimise_subset, Solver, Terms, MAX_POOL};
